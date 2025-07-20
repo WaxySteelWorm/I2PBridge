@@ -1,18 +1,11 @@
 // lib/pages/irc_page.dart
-// This version adds command handling (/join), fixes channel redirection bugs,
-// and filters out the server's MOTD for a cleaner interface.
+// This is a major UI overhaul, adding a user list drawer, timestamps,
+// color-coded nicks, and moderator actions.
 
 import 'package:flutter/material.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
-
-// A simple data class for parsed IRC messages
-class ParsedMessage {
-  final String sender;
-  final String content;
-  final bool isNotice;
-
-  ParsedMessage({required this.sender, required this.content, this.isNotice = false});
-}
+import 'package:provider/provider.dart';
+import 'package:intl/intl.dart'; // For formatting timestamps
+import '../services/irc_service.dart';
 
 class IrcPage extends StatefulWidget {
   const IrcPage({super.key});
@@ -21,178 +14,56 @@ class IrcPage extends StatefulWidget {
   State<IrcPage> createState() => _IrcPageState();
 }
 
-class _IrcPageState extends State<IrcPage> {
-  final TextEditingController _nickController = TextEditingController(text: 'i2p-user');
-  final TextEditingController _channelController = TextEditingController(text: '#i2p-help');
+class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
+  final TextEditingController _channelController = TextEditingController(text: '#i2p');
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  WebSocketChannel? _channel;
-  bool _isConnected = false;
-  final List<ParsedMessage> _messages = [];
+  @override
+  bool get wantKeepAlive => true;
 
-  // --- NEW STATE VARIABLES ---
-  String _currentChannel = ''; // To track the actual channel we are in
-  bool _hasFinishedJoin = false; // To filter out MOTD messages
-
-  void _connect() {
-    final wsUrl = Uri.parse('ws://bridge.stormycloud.org:3000');
-    _channel = WebSocketChannel.connect(wsUrl);
-
-    setState(() {
-      _isConnected = true;
-      _messages.clear();
-      _hasFinishedJoin = false; // Reset on new connection
-      _addMessage(sender: 'Status', content: 'Connecting to IRC via bridge...');
-    });
-
-    _channel!.stream.listen(
-      (rawMessage) {
-        // Wait for registration (001) before trying to join
-        if (rawMessage.contains(' 001 ')) {
-          _addMessage(sender: 'Status', content: 'Connected! Joining channel...');
-          _sendMessageToSocket('JOIN ${_channelController.text}');
-        }
-        
-        _handleMessage(rawMessage);
-
-        if (rawMessage.startsWith('PING')) {
-          final pingData = rawMessage.split(' ')[1];
-          _sendMessageToSocket('PONG $pingData');
-        }
-      },
-      onDone: () {
-        setState(() {
-          _addMessage(sender: 'Status', content: 'Disconnected from server.');
-          _isConnected = false;
-        });
-      },
-      onError: (error) {
-        setState(() {
-          _addMessage(sender: 'Status', content: 'Error: $error');
-          _isConnected = false;
-        });
-      },
-    );
-
-    _sendMessageToSocket('NICK ${_nickController.text}');
-    _sendMessageToSocket('USER ${_nickController.text} 0 * :I2P Bridge User');
-  }
-
-  void _handleMessage(String rawMessage) {
-    // --- FEATURE: Filter MOTD ---
-    // IRC code 366 indicates "End of /NAMES list."
-    if (rawMessage.contains(' 366 ')) {
-      setState(() {
-        _hasFinishedJoin = true;
-      });
-    }
-
-    if (rawMessage.contains('PRIVMSG')) {
-      final parts = rawMessage.split('PRIVMSG');
-      final sender = parts[0].split('!')[0].replaceFirst(':', '').trim();
-      final content = parts[1].split(':').sublist(1).join(':').trim();
-      _addMessage(sender: sender, content: content);
-    } else if (rawMessage.contains('NOTICE')) {
-       final parts = rawMessage.split('NOTICE');
-       final content = parts[1].split(':').sublist(1).join(':').trim();
-       _addMessage(sender: 'Notice', content: content, isNotice: true);
-    } else if (rawMessage.contains('JOIN')) {
-       final sender = rawMessage.split('!')[0].replaceFirst(':', '').trim();
-       // --- BUG FIX: Track current channel ---
-       final channel = rawMessage.split('JOIN :')[1].trim();
-       setState(() {
-         _currentChannel = channel;
-       });
-       _addMessage(sender: 'Status', content: '$sender has joined $channel.');
-    } else if (rawMessage.contains('PART')) {
-       final sender = rawMessage.split('!')[0].replaceFirst(':', '').trim();
-       _addMessage(sender: 'Status', content: '$sender has left the channel.');
-    }
-  }
-  
-  void _addMessage({required String sender, required String content, bool isNotice = false}) {
-      setState(() {
-          _messages.add(ParsedMessage(sender: sender, content: content, isNotice: isNotice));
-      });
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final ircService = Provider.of<IrcService>(context);
+    if (ircService.buffers.isNotEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (_scrollController.hasClients) {
           _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
         }
       });
-  }
-
-  void _disconnect() {
-    _channel?.sink.close();
-    setState(() {
-      _isConnected = false;
-    });
-  }
-
-  void _sendMessageToSocket(String message) {
-    _channel?.sink.add(message);
-  }
-
-  // Renamed to handle both commands and messages
-  void _handleUserInput() {
-    if (_messageController.text.isEmpty) return;
-
-    final text = _messageController.text;
-
-    // --- FEATURE: Command Parsing ---
-    if (text.startsWith('/')) {
-      final parts = text.split(' ');
-      final command = parts[0].toLowerCase();
-
-      if (command == '/join' && parts.length > 1) {
-        final channel = parts[1];
-        _sendMessageToSocket('JOIN $channel');
-        _addMessage(sender: 'Status', content: 'Attempting to join $channel...');
-        setState(() {
-          _hasFinishedJoin = false; // Reset for the new channel
-          _messages.clear(); // Clear messages from old channel
-        });
-      } else {
-        _addMessage(sender: 'Error', content: 'Unknown command: $command');
-      }
-    } else {
-      // It's a regular chat message
-      final message = 'PRIVMSG $_currentChannel :$text';
-      _sendMessageToSocket(message);
-      _addMessage(sender: _nickController.text, content: text);
     }
-    _messageController.clear();
   }
-
-  @override
-  void dispose() {
-    _channel?.sink.close();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
+  
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: _isConnected ? _buildChatView() : _buildConnectionView(),
+    super.build(context);
+    return Consumer<IrcService>(
+      builder: (context, ircService, child) {
+        return Scaffold(
+          key: _scaffoldKey,
+          // --- NEW: User List Drawer ---
+          endDrawer: _buildUserListDrawer(context, ircService),
+          body: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: ircService.isConnected
+                ? _buildChatView(context, ircService)
+                : _buildConnectionView(context, ircService),
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildConnectionView() {
+  Widget _buildConnectionView(BuildContext context, IrcService ircService) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const Icon(Icons.connect_without_contact, size: 80, color: Colors.grey),
         const SizedBox(height: 24),
-        TextField(
-          controller: _nickController,
-          decoration: const InputDecoration(
-            labelText: 'Nickname',
-            border: OutlineInputBorder(),
-          ),
-        ),
+        Text('Connecting as: ${ircService.nickname}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
         const SizedBox(height: 16),
         TextField(
           controller: _channelController,
@@ -204,7 +75,7 @@ class _IrcPageState extends State<IrcPage> {
         ),
         const SizedBox(height: 24),
         ElevatedButton(
-          onPressed: _connect,
+          onPressed: () => ircService.connect(_channelController.text),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
@@ -214,9 +85,45 @@ class _IrcPageState extends State<IrcPage> {
     );
   }
 
-  Widget _buildChatView() {
+  Widget _buildChatView(BuildContext context, IrcService ircService) {
+    final currentMessages = ircService.currentBufferMessages;
     return Column(
       children: [
+        SizedBox(
+          height: 40,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            children: ircService.buffers.keys.map((bufferName) {
+              return GestureDetector(
+                onTap: () => ircService.setCurrentBuffer(bufferName),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  margin: const EdgeInsets.only(right: 8),
+                  decoration: BoxDecoration(
+                    color: ircService.currentBuffer == bufferName ? Colors.blueAccent : Colors.grey.shade800,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    children: [
+                      Text(bufferName),
+                      if (ircService.unreadBuffers.contains(bufferName))
+                        Container(
+                          margin: const EdgeInsets.only(left: 8),
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+        const SizedBox(height: 12),
         Expanded(
           child: Container(
             padding: const EdgeInsets.all(8.0),
@@ -226,30 +133,42 @@ class _IrcPageState extends State<IrcPage> {
             ),
             child: ListView.builder(
               controller: _scrollController,
-              itemCount: _messages.length,
+              itemCount: currentMessages.length,
               itemBuilder: (context, index) {
-                final msg = _messages[index];
-                
-                // Only show messages after the join process is complete
-                if (!_hasFinishedJoin && msg.sender != 'Status') {
-                  return const SizedBox.shrink(); // Render nothing
-                }
-
+                final msg = currentMessages[index];
                 if (msg.isNotice || msg.sender == 'Status') {
-                    return Text(
-                        '--- ${msg.content} ---',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
-                    );
-                }
-                return RichText(
-                    text: TextSpan(
-                        style: DefaultTextStyle.of(context).style,
-                        children: <TextSpan>[
-                            TextSpan(text: '${msg.sender}: ', style: const TextStyle(fontWeight: FontWeight.bold)),
-                            TextSpan(text: msg.content),
-                        ],
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4.0),
+                    child: Text(
+                      '--- ${msg.content} ---',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
                     ),
+                  );
+                }
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2.0),
+                  child: RichText(
+                    text: TextSpan(
+                      style: DefaultTextStyle.of(context).style.copyWith(fontSize: 15),
+                      children: <TextSpan>[
+                        // --- NEW: Timestamp ---
+                        TextSpan(
+                          text: '${DateFormat('HH:mm').format(msg.timestamp)} ',
+                          style: const TextStyle(color: Colors.grey),
+                        ),
+                        // --- NEW: Color-Coded Nickname ---
+                        TextSpan(
+                          text: '${msg.sender}: ',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: ircService.getUserColor(msg.sender),
+                          ),
+                        ),
+                        TextSpan(text: msg.content),
+                      ],
+                    ),
+                  ),
                 );
               },
             ),
@@ -261,17 +180,28 @@ class _IrcPageState extends State<IrcPage> {
             Expanded(
               child: TextField(
                 controller: _messageController,
-                decoration: const InputDecoration(
-                  hintText: 'Send a message or /join #channel',
-                  border: OutlineInputBorder(),
+                decoration: InputDecoration(
+                  hintText: 'Message ${ircService.currentBuffer}...',
+                  border: const OutlineInputBorder(),
                 ),
-                onSubmitted: (_) => _handleUserInput(),
+                onSubmitted: (_) {
+                  ircService.handleUserInput(_messageController.text);
+                  _messageController.clear();
+                },
               ),
             ),
             const SizedBox(width: 8),
+            // --- NEW: User List Button ---
+            IconButton(
+              icon: const Icon(Icons.people_outline),
+              onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
+            ),
             IconButton(
               icon: const Icon(Icons.send),
-              onPressed: _handleUserInput,
+              onPressed: () {
+                ircService.handleUserInput(_messageController.text);
+                _messageController.clear();
+              },
               style: IconButton.styleFrom(
                 backgroundColor: Colors.blueAccent,
                 foregroundColor: Colors.white,
@@ -280,10 +210,128 @@ class _IrcPageState extends State<IrcPage> {
           ],
         ),
         TextButton(
-          onPressed: _disconnect,
+          onPressed: () => ircService.disconnect(),
           child: const Text('Disconnect'),
         )
       ],
+    );
+  }
+
+  // --- NEW: User List Drawer Widget ---
+  Widget _buildUserListDrawer(BuildContext context, IrcService ircService) {
+    final userList = ircService.currentUserList;
+    userList.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase())); // Sort alphabetically
+
+    return Drawer(
+      child: Column(
+        children: [
+          AppBar(
+            title: Text('Users in ${ircService.currentBuffer}'),
+            automaticallyImplyLeading: false,
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: userList.length,
+              itemBuilder: (context, index) {
+                final user = userList[index];
+                return ListTile(
+                  title: Text(user),
+                  onTap: () {
+                    // Start a private message
+                    ircService.handleUserInput('/query $user');
+                    Navigator.of(context).pop(); // Close the drawer
+                  },
+                  // --- NEW: Moderator Actions ---
+                  onLongPress: () {
+                    _showModeratorActions(context, ircService, user);
+                  },
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- NEW: Moderator Actions Menu ---
+  void _showModeratorActions(BuildContext context, IrcService ircService, String user) {
+    showModalBottomSheet(
+      context: context,
+      builder: (BuildContext context) {
+        return Wrap(
+          children: <Widget>[
+            ListTile(
+              leading: const Icon(Icons.record_voice_over),
+              title: const Text('Voice'),
+              onTap: () {
+                ircService.handleUserInput('/mode ${ircService.currentBuffer} +v $user');
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.security),
+              title: const Text('Op'),
+              onTap: () {
+                ircService.handleUserInput('/mode ${ircService.currentBuffer} +o $user');
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.exit_to_app),
+              title: const Text('Kick'),
+              onTap: () {
+                Navigator.pop(context); // Close the menu first
+                _showKickBanDialog(context, ircService, user, 'KICK');
+              },
+            ),
+             ListTile(
+              leading: const Icon(Icons.block),
+              title: const Text('Ban'),
+              onTap: () {
+                 Navigator.pop(context);
+                _showKickBanDialog(context, ircService, user, 'BAN');
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // --- NEW: Dialog for Kick/Ban reason ---
+  void _showKickBanDialog(BuildContext context, IrcService ircService, String user, String action) {
+    final reasonController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('$action $user'),
+          content: TextField(
+            controller: reasonController,
+            decoration: const InputDecoration(hintText: 'Reason (optional)'),
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: Text(action),
+              onPressed: () {
+                final reason = reasonController.text.isNotEmpty ? reasonController.text : 'No reason specified';
+                if (action == 'KICK') {
+                  ircService.handleUserInput('/kick ${ircService.currentBuffer} $user $reason');
+                } else if (action == 'BAN') {
+                  // A simple ban, more complex masks could be added later
+                  ircService.handleUserInput('/mode ${ircService.currentBuffer} +b $user!*@*');
+                }
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 }
