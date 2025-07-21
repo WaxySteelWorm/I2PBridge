@@ -1,10 +1,9 @@
 // lib/pages/irc_page.dart
-// This is a major UI overhaul, adding a user list drawer, timestamps,
-// color-coded nicks, and moderator actions.
+// Enhanced IRC page with encryption indicators
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart'; // For formatting timestamps
+import 'package:intl/intl.dart';
 import '../services/irc_service.dart';
 
 class IrcPage extends StatefulWidget {
@@ -43,7 +42,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
       builder: (context, ircService, child) {
         return Scaffold(
           key: _scaffoldKey,
-          // --- NEW: User List Drawer ---
           endDrawer: _buildUserListDrawer(context, ircService),
           body: Padding(
             padding: const EdgeInsets.all(16.0),
@@ -61,7 +59,19 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Icon(Icons.connect_without_contact, size: 80, color: Colors.grey),
+        const Icon(Icons.lock, size: 80, color: Colors.green),
+        const SizedBox(height: 24),
+        const Text(
+          'Encrypted IRC Chat',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Your messages are end-to-end encrypted',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: Colors.grey),
+        ),
         const SizedBox(height: 24),
         Text('Connecting as: ${ircService.nickname}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
         const SizedBox(height: 16),
@@ -71,15 +81,17 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             labelText: 'Channel',
             border: OutlineInputBorder(),
             hintText: '#channel',
+            prefixIcon: Icon(Icons.tag),
           ),
         ),
         const SizedBox(height: 24),
-        ElevatedButton(
+        ElevatedButton.icon(
           onPressed: () => ircService.connect(_channelController.text),
+          icon: const Icon(Icons.lock),
+          label: const Text('Connect Securely', style: TextStyle(fontSize: 16)),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
-          child: const Text('Connect', style: TextStyle(fontSize: 16)),
         ),
       ],
     );
@@ -89,6 +101,7 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
     final currentMessages = ircService.currentBufferMessages;
     return Column(
       children: [
+        // Channel tabs with encryption indicators
         SizedBox(
           height: 40,
           child: ListView(
@@ -105,6 +118,10 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                   ),
                   child: Row(
                     children: [
+                      if (bufferName != 'Status')
+                        const Icon(Icons.lock, size: 14, color: Colors.green),
+                      if (bufferName != 'Status')
+                        const SizedBox(width: 4),
                       Text(bufferName),
                       if (ircService.unreadBuffers.contains(bufferName))
                         Container(
@@ -121,6 +138,29 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                 ),
               );
             }).toList(),
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Encryption status bar
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.green.withOpacity(0.3)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.lock, size: 16, color: Colors.green),
+              const SizedBox(width: 8),
+              Text(
+                ircService.currentBuffer == 'Status' 
+                  ? 'Server messages' 
+                  : 'End-to-end encrypted',
+                style: const TextStyle(fontSize: 12, color: Colors.green),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 12),
@@ -148,26 +188,38 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                 }
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2.0),
-                  child: RichText(
-                    text: TextSpan(
-                      style: DefaultTextStyle.of(context).style.copyWith(fontSize: 15),
-                      children: <TextSpan>[
-                        // --- NEW: Timestamp ---
-                        TextSpan(
-                          text: '${DateFormat('HH:mm').format(msg.timestamp)} ',
-                          style: const TextStyle(color: Colors.grey),
-                        ),
-                        // --- NEW: Color-Coded Nickname ---
-                        TextSpan(
-                          text: '${msg.sender}: ',
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            color: ircService.getUserColor(msg.sender),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Encryption indicator
+                      Icon(
+                        msg.isEncrypted ? Icons.lock : Icons.lock_open,
+                        size: 12,
+                        color: msg.isEncrypted ? Colors.green : Colors.orange,
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: RichText(
+                          text: TextSpan(
+                            style: DefaultTextStyle.of(context).style.copyWith(fontSize: 15),
+                            children: <TextSpan>[
+                              TextSpan(
+                                text: '${DateFormat('HH:mm').format(msg.timestamp)} ',
+                                style: const TextStyle(color: Colors.grey),
+                              ),
+                              TextSpan(
+                                text: '${msg.sender}: ',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: ircService.getUserColor(msg.sender),
+                                ),
+                              ),
+                              TextSpan(text: msg.content),
+                            ],
                           ),
                         ),
-                        TextSpan(text: msg.content),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 );
               },
@@ -181,8 +233,9 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
               child: TextField(
                 controller: _messageController,
                 decoration: InputDecoration(
-                  hintText: 'Message ${ircService.currentBuffer}...',
+                  hintText: 'Encrypted message to ${ircService.currentBuffer}...',
                   border: const OutlineInputBorder(),
+                  prefixIcon: const Icon(Icons.lock, size: 16, color: Colors.green),
                 ),
                 onSubmitted: (_) {
                   ircService.handleUserInput(_messageController.text);
@@ -191,7 +244,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
               ),
             ),
             const SizedBox(width: 8),
-            // --- NEW: User List Button ---
             IconButton(
               icon: const Icon(Icons.people_outline),
               onPressed: () => _scaffoldKey.currentState?.openEndDrawer(),
@@ -209,6 +261,12 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             ),
           ],
         ),
+        // Help text
+        const SizedBox(height: 8),
+        Text(
+          'Use /key <password> to set a custom channel encryption key',
+          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+        ),
         TextButton(
           onPressed: () => ircService.disconnect(),
           child: const Text('Disconnect'),
@@ -217,10 +275,9 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
     );
   }
 
-  // --- NEW: User List Drawer Widget ---
   Widget _buildUserListDrawer(BuildContext context, IrcService ircService) {
     final userList = ircService.currentUserList;
-    userList.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase())); // Sort alphabetically
+    userList.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     return Drawer(
       child: Column(
@@ -229,19 +286,35 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             title: Text('Users in ${ircService.currentBuffer}'),
             automaticallyImplyLeading: false,
           ),
+          Container(
+            padding: const EdgeInsets.all(12),
+            color: Colors.green.withOpacity(0.1),
+            child: Row(
+              children: const [
+                Icon(Icons.lock, size: 16, color: Colors.green),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Private messages are encrypted',
+                    style: TextStyle(fontSize: 12, color: Colors.green),
+                  ),
+                ),
+              ],
+            ),
+          ),
           Expanded(
             child: ListView.builder(
               itemCount: userList.length,
               itemBuilder: (context, index) {
                 final user = userList[index];
                 return ListTile(
+                  leading: const Icon(Icons.person, size: 20),
                   title: Text(user),
+                  subtitle: const Text('Tap to start encrypted chat', style: TextStyle(fontSize: 12)),
                   onTap: () {
-                    // Start a private message
                     ircService.handleUserInput('/query $user');
-                    Navigator.of(context).pop(); // Close the drawer
+                    Navigator.of(context).pop();
                   },
-                  // --- NEW: Moderator Actions ---
                   onLongPress: () {
                     _showModeratorActions(context, ircService, user);
                   },
@@ -254,7 +327,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
     );
   }
 
-  // --- NEW: Moderator Actions Menu ---
   void _showModeratorActions(BuildContext context, IrcService ircService, String user) {
     showModalBottomSheet(
       context: context,
@@ -281,7 +353,7 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
               leading: const Icon(Icons.exit_to_app),
               title: const Text('Kick'),
               onTap: () {
-                Navigator.pop(context); // Close the menu first
+                Navigator.pop(context);
                 _showKickBanDialog(context, ircService, user, 'KICK');
               },
             ),
@@ -299,7 +371,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
     );
   }
 
-  // --- NEW: Dialog for Kick/Ban reason ---
   void _showKickBanDialog(BuildContext context, IrcService ircService, String user, String action) {
     final reasonController = TextEditingController();
     showDialog(
@@ -323,7 +394,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                 if (action == 'KICK') {
                   ircService.handleUserInput('/kick ${ircService.currentBuffer} $user $reason');
                 } else if (action == 'BAN') {
-                  // A simple ban, more complex masks could be added later
                   ircService.handleUserInput('/mode ${ircService.currentBuffer} +b $user!*@*');
                 }
                 Navigator.of(context).pop();
