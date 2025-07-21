@@ -19,4 +19,7 @@ samples, guidance on mobile development, and a full API reference.
 TODO
 
 FIX POPULAR I2P LIST
+
 DROP.I2P Color
+
+IRC still not popping out to initial channel

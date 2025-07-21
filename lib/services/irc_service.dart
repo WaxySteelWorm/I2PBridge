@@ -1,41 +1,43 @@
 // lib/services/irc_service.dart
-// Enhanced IRC service with end-to-end encryption
+// IRC service with encrypted WebSocket transport
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'encryption_service.dart';
+import 'package:pointycastle/pointycastle.dart';
+import 'package:pointycastle/export.dart';
 
 class ParsedMessage {
   final String sender;
   final String content;
   final bool isNotice;
   final DateTime timestamp;
-  final bool isEncrypted;
+  final bool isPrivate;
 
   ParsedMessage({
     required this.sender, 
     required this.content, 
     this.isNotice = false,
-    this.isEncrypted = false,
+    this.isPrivate = false,
   }) : timestamp = DateTime.now();
 }
 
 class IrcService with ChangeNotifier {
   WebSocketChannel? _channel;
-  final EncryptionService _encryption = EncryptionService(); // Singleton instance
+  
+  // Encryption components
+  Uint8List? _sessionKey;
+  Uint8List? _sessionIV;
+  bool _encryptionReady = false;
   
   bool _isConnected = false;
   final Map<String, List<ParsedMessage>> _buffers = {};
   String _currentBuffer = 'Status';
   final Set<String> _unreadBuffers = {};
-
-  // Encryption keys for channels and private messages
-  final Map<String, String> _channelKeys = {};
-  final Map<String, String> _privateKeys = {};
   
   final Map<String, List<String>> _userLists = {};
   final Map<String, Color> _userColors = {};
@@ -62,7 +64,6 @@ class IrcService with ChangeNotifier {
   bool _hideJoinQuit = false;
 
   IrcService() {
-    _encryption.initialize(); // Safe to call multiple times now
     _loadSettings();
   }
 
@@ -74,15 +75,59 @@ class IrcService with ChangeNotifier {
     notifyListeners();
   }
 
+  // Encryption methods
+  String _encryptMessage(String message) {
+    if (!_encryptionReady || _sessionKey == null || _sessionIV == null) {
+      return message;
+    }
+    
+    try {
+      final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
+      final params = PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(_sessionKey!), _sessionIV!),
+        null
+      );
+      cipher.init(true, params);
+      
+      final plaintext = utf8.encode(message);
+      final encrypted = cipher.process(Uint8List.fromList(plaintext));
+      
+      return base64.encode(encrypted);
+    } catch (e) {
+      print('Encryption error: $e');
+      return message;
+    }
+  }
+
+  String _decryptMessage(String encryptedData) {
+    if (!_encryptionReady || _sessionKey == null || _sessionIV == null) {
+      return encryptedData;
+    }
+    
+    try {
+      final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
+      final params = PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(_sessionKey!), _sessionIV!),
+        null
+      );
+      cipher.init(false, params);
+      
+      final encrypted = base64.decode(encryptedData);
+      final decrypted = cipher.process(encrypted);
+      
+      return utf8.decode(decrypted);
+    } catch (e) {
+      print('Decryption error: $e');
+      return '[Decryption Error]';
+    }
+  }
+
   void connect(String initialChannel) {
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
-    _lastChannel = initialChannel;
+    _lastChannel = initialChannel; // Store the channel to join
     
     _loadSettings().then((_) {
-      // Generate encryption key for the channel
-      _generateChannelKey(initialChannel);
-      
       final wsUrl = Uri.parse('ws://bridge.stormycloud.org:3000');
       _channel = WebSocketChannel.connect(wsUrl);
 
@@ -91,49 +136,89 @@ class IrcService with ChangeNotifier {
       _unreadBuffers.clear();
       _userLists.clear();
       _currentBuffer = 'Status';
+      _encryptionReady = false;
+      
       _buffers['Status'] = [ParsedMessage(
         sender: 'Status', 
-        content: 'Connecting with end-to-end encryption...',
-        isEncrypted: true,
+        content: 'Establishing secure connection...',
       )];
       notifyListeners();
 
       bool registrationComplete = false;
+      bool hasJoinedChannel = false;
 
       _channel!.stream.listen(
         (data) {
-          final lines = data.toString().split('\r\n');
-          for (final rawMessage in lines) {
-            if (rawMessage.isEmpty) continue;
-
-            // Check if this is an encrypted message from another client
-            if (_isEncryptedMessage(rawMessage)) {
-              _handleEncryptedMessage(rawMessage);
-            } else {
-              // Handle standard IRC protocol messages
-              if (!registrationComplete && rawMessage.contains(' 001 ')) {
-                registrationComplete = true;
-                _addMessage(to: 'Status', sender: 'Status', content: 'Connected! Authenticating...');
-                if (_nickServPassword.isNotEmpty) {
-                  _sendRawMessage('PRIVMSG NickServ :IDENTIFY $_nickServPassword');
-                }
-                Future.delayed(const Duration(seconds: 2), () {
-                  _sendRawMessage('JOIN $initialChannel');
-                  // Announce encryption capability
-                  _announceEncryption(initialChannel);
-                });
-              }
+          try {
+            final jsonData = json.decode(data);
+            
+            // Handle encryption initialization
+            if (jsonData['type'] == 'encryption_init') {
+              _sessionKey = base64.decode(jsonData['key']);
+              _sessionIV = base64.decode(jsonData['iv']);
+              _encryptionReady = true;
               
-              _handleStandardMessage(rawMessage);
-
-              if (rawMessage.startsWith('PING')) {
-                _sendRawMessage('PONG ${rawMessage.split(" ")[1]}');
+              // Send acknowledgment
+              _channel!.sink.add(json.encode({
+                'type': 'encryption_ack'
+              }));
+              
+              _addMessage(
+                to: 'Status', 
+                sender: 'Status', 
+                content: '🔒 Encrypted connection established'
+              );
+              
+              // Now send IRC registration
+              _sendEncryptedMessage('NICK $_nickname');
+              _sendEncryptedMessage('USER $_nickname 0 * :I2P Bridge User');
+              return;
+            }
+            
+            // Handle encrypted IRC messages
+            if (jsonData['type'] == 'irc_message' && jsonData['encrypted'] == true) {
+              final decrypted = _decryptMessage(jsonData['data']);
+              final lines = decrypted.split('\r\n');
+              
+              for (final rawMessage in lines) {
+                if (rawMessage.isEmpty) continue;
+                
+                if (!registrationComplete && (rawMessage.contains(' 001 ') || rawMessage.contains(' 376 ') || rawMessage.contains(' 422 '))) {
+                  // 001 = Welcome, 376 = End of MOTD, 422 = No MOTD
+                  registrationComplete = true;
+                  _addMessage(to: 'Status', sender: 'Status', content: 'Connected successfully!');
+                  
+                  // Handle NickServ authentication if configured
+                  if (_nickServPassword.isNotEmpty) {
+                    _sendEncryptedMessage('PRIVMSG NickServ :IDENTIFY $_nickServPassword');
+                  }
+                  
+                  // Join the initial channel after a short delay
+                  if (!hasJoinedChannel && _lastChannel.isNotEmpty) {
+                    hasJoinedChannel = true;
+                    // Shorter delay for better UX
+                    Future.delayed(const Duration(milliseconds: 500), () {
+                      _addMessage(to: 'Status', sender: 'Status', content: 'Joining $_lastChannel...');
+                      _sendEncryptedMessage('JOIN $_lastChannel');
+                    });
+                  }
+                }
+                
+                _handleMessage(rawMessage);
+                
+                if (rawMessage.startsWith('PING')) {
+                  _sendEncryptedMessage('PONG ${rawMessage.split(" ")[1]}');
+                }
               }
             }
+          } catch (e) {
+            // Fallback for non-JSON messages (shouldn't happen)
+            print('Message parsing error: $e');
           }
         },
         onDone: () {
           _isConnected = false;
+          _encryptionReady = false;
           _addMessage(to: 'Status', sender: 'Status', content: 'Disconnected.');
           if (!_manualDisconnect) {
             _scheduleReconnect();
@@ -143,16 +228,27 @@ class IrcService with ChangeNotifier {
         onError: (error) {
           _addMessage(to: 'Status', sender: 'Status', content: 'Error: $error');
           _isConnected = false;
+          _encryptionReady = false;
           if (!_manualDisconnect) {
             _scheduleReconnect();
           }
           notifyListeners();
         },
       );
-
-      _sendRawMessage('NICK $_nickname');
-      _sendRawMessage('USER $_nickname 0 * :I2P Bridge User (Encrypted)');
     });
+  }
+
+  void _sendEncryptedMessage(String message) {
+    if (!_encryptionReady) {
+      print('Encryption not ready, dropping message: $message');
+      return;
+    }
+    
+    final encrypted = _encryptMessage(message);
+    _channel?.sink.add(json.encode({
+      'encrypted': true,
+      'data': encrypted
+    }));
   }
 
   void _scheduleReconnect() {
@@ -163,99 +259,76 @@ class IrcService with ChangeNotifier {
     });
   }
 
-  bool _isEncryptedMessage(String rawMessage) {
-    // Check if message contains our encryption marker
-    return rawMessage.contains('PRIVMSG') && rawMessage.contains('[E2E]');
-  }
-
-  void _handleEncryptedMessage(String rawMessage) {
-    try {
-      final parts = rawMessage.split('PRIVMSG');
-      final sender = parts[0].split('!')[0].replaceFirst(':', '').trim();
-      final targetAndContent = parts[1].trim();
-      final target = targetAndContent.split(' ')[0];
-      final encryptedContent = targetAndContent.split(':[E2E]')[1].trim();
-      
-      // Decrypt the message
-      String decryptedContent;
-      String keyToUse;
-      
-      if (target.startsWith('#')) {
-        // Channel message - use channel key
-        keyToUse = _channelKeys[target] ?? '';
-      } else {
-        // Private message - use private key
-        keyToUse = _privateKeys[sender] ?? '';
+  void _handleMessage(String rawMessage) {
+    // Server numeric messages should go to Status
+    if (RegExp(r':\S+ \d{3} ').hasMatch(rawMessage)) {
+      final match = RegExp(r':\S+ \d{3} \S+ :?(.*)').firstMatch(rawMessage);
+      if (match != null) {
+        final content = match.group(1) ?? rawMessage;
+        if (content.trim().isNotEmpty) {
+          _addMessage(to: 'Status', sender: 'Server', content: content.trim());
+        }
       }
-      
-      try {
-        // Simple XOR decryption for demonstration
-        // In production, use proper AES decryption with the key
-        decryptedContent = _decryptMessage(encryptedContent, keyToUse);
-      } catch (e) {
-        decryptedContent = '[Unable to decrypt - wrong key?]';
-      }
-      
-      final bufferName = target.startsWith('#') ? target : sender;
-      _addMessage(
-        to: bufferName, 
-        sender: sender, 
-        content: decryptedContent,
-        isEncrypted: true
-      );
-    } catch (e) {
-      print('Error handling encrypted message: $e');
+      return;
     }
-  }
 
-  void _handleStandardMessage(String rawMessage) {
     // Handle user lists
     if (rawMessage.contains(' 353 ')) {
       final parts = rawMessage.split(' ');
-      final channel = parts[4];
-      final userListString = rawMessage.split('$channel :')[1];
-      final users = userListString.split(' ');
+      if (parts.length > 4) {
+        final channel = parts[4];
+        final userListString = rawMessage.split('$channel :')[1];
+        final users = userListString.split(' ');
 
-      if (!_userLists.containsKey(channel)) _userLists[channel] = [];
-      
-      if(!(_buffers[channel]?.any((m) => m.sender == 'Status' && m.content.contains('has joined')) ?? false)) {
-          _userLists[channel]?.clear();
-      }
+        if (!_userLists.containsKey(channel)) _userLists[channel] = [];
+        _userLists[channel]?.clear();
 
-      for (var user in users) {
-        if (user.isNotEmpty && !_userLists[channel]!.contains(user)) {
-          _userLists[channel]!.add(user);
+        for (var user in users) {
+          if (user.isNotEmpty) {
+            _userLists[channel]!.add(user);
+          }
         }
       }
     }
 
-    // Handle regular messages (non-encrypted)
-    if (rawMessage.contains('PRIVMSG') && !rawMessage.contains('[E2E]')) {
+    // Handle PRIVMSG
+    if (rawMessage.contains('PRIVMSG')) {
       final parts = rawMessage.split('PRIVMSG');
       final sender = parts[0].split('!')[0].replaceFirst(':', '').trim();
       final targetAndContent = parts[1].trim();
       final target = targetAndContent.split(' ')[0];
       final content = targetAndContent.split(':').sublist(1).join(':').trim();
+      
       final bufferName = target.startsWith('#') ? target : sender;
       
       _addMessage(
         to: bufferName, 
         sender: sender, 
-        content: content + ' [⚠️ Unencrypted]',
-        isEncrypted: false
+        content: content,
+        isPrivate: !target.startsWith('#')
       );
-    } else if (rawMessage.contains('JOIN')) {
-      final sender = rawMessage.split('!')[0].replaceFirst(':', '').trim();
-      final channel = rawMessage.split('JOIN :')[1].trim();
-      if (!_hideJoinQuit) {
-        _addMessage(to: channel, sender: 'Status', content: '$sender has joined $channel.');
+    } 
+    // Handle JOIN
+    else if (rawMessage.contains('JOIN')) {
+      final parts = rawMessage.split('!');
+      if (parts.isNotEmpty) {
+        final sender = parts[0].replaceFirst(':', '').trim();
+        final channelMatch = RegExp(r'JOIN :?(.+)').firstMatch(rawMessage);
+        if (channelMatch != null) {
+          final channel = channelMatch.group(1)?.trim() ?? '';
+          if (!_hideJoinQuit && channel.isNotEmpty) {
+            _addMessage(to: channel, sender: 'Status', content: '$sender has joined $channel.');
+          }
+          if (!_userLists.containsKey(channel)) _userLists[channel] = [];
+          _userLists[channel]!.add(sender);
+          if (sender == _nickname) {
+            setCurrentBuffer(channel);
+          }
+        }
       }
-      if (!_userLists.containsKey(channel)) _userLists[channel] = [];
-      _userLists[channel]!.add(sender);
-      if (sender == _nickname) {
-        setCurrentBuffer(channel);
-      }
-    } else if (rawMessage.contains('PART') || rawMessage.contains('QUIT') || rawMessage.contains('KICK')) {
+    }
+    // Handle PART/QUIT/KICK
+    else if (rawMessage.contains('PART') || rawMessage.contains('QUIT') || rawMessage.contains('KICK')) {
       final sender = rawMessage.split('!')[0].replaceFirst(':', '').trim();
       _userLists.forEach((channel, users) {
         users.removeWhere((user) => user.replaceAll(RegExp(r'[@+~&]'), '') == sender);
@@ -272,14 +345,14 @@ class IrcService with ChangeNotifier {
     required String sender, 
     required String content, 
     bool isNotice = false,
-    bool isEncrypted = false,
+    bool isPrivate = false,
   }) {
     if (!_buffers.containsKey(to)) _buffers[to] = [];
     _buffers[to]!.add(ParsedMessage(
       sender: sender, 
       content: content, 
       isNotice: isNotice,
-      isEncrypted: isEncrypted,
+      isPrivate: isPrivate,
     ));
     if (to != _currentBuffer) _unreadBuffers.add(to);
     notifyListeners();
@@ -296,20 +369,15 @@ class IrcService with ChangeNotifier {
             final channel = parts[1];
             if (!_buffers.containsKey(channel)) {
               _buffers[channel] = [];
-              _generateChannelKey(channel);
             }
             setCurrentBuffer(channel);
-            _sendRawMessage('JOIN $channel');
-            _announceEncryption(channel);
+            _sendEncryptedMessage('JOIN $channel');
           }
           break;
         case '/query':
           if (parts.length > 1) {
             final user = parts[1].replaceAll(RegExp(r'[@+~&]'), '');
-            if (!_buffers.containsKey(user)) {
-              _buffers[user] = [];
-              _generatePrivateKey(user);
-            }
+            if (!_buffers.containsKey(user)) _buffers[user] = [];
             setCurrentBuffer(user);
           }
           break;
@@ -317,106 +385,34 @@ class IrcService with ChangeNotifier {
           if (parts.length > 2) {
             final target = parts[1];
             final message = parts.sublist(2).join(' ');
-            _sendEncryptedMessage(target, message);
+            _sendMessage(target, message);
           }
           break;
-        case '/key':
-          // Set custom encryption key for current buffer
+        case '/me':
           if (parts.length > 1) {
-            final key = parts.sublist(1).join(' ');
-            if (_currentBuffer.startsWith('#')) {
-              _channelKeys[_currentBuffer] = key;
-              _addMessage(
-                to: _currentBuffer, 
-                sender: 'Status', 
-                content: '🔐 Channel encryption key updated'
-              );
-            }
+            final action = parts.sublist(1).join(' ');
+            _sendEncryptedMessage('PRIVMSG $_currentBuffer :\x01ACTION $action\x01');
+            _addMessage(to: _currentBuffer, sender: '* $_nickname', content: action);
           }
           break;
         default:
-          _sendRawMessage(text.substring(1));
+          // Send raw IRC command
+          _sendEncryptedMessage(text.substring(1));
       }
     } else {
-      _sendEncryptedMessage(_currentBuffer, text);
+      _sendMessage(_currentBuffer, text);
     }
     notifyListeners();
   }
 
-  void _sendEncryptedMessage(String target, String message) {
-    String keyToUse;
-    if (target.startsWith('#')) {
-      keyToUse = _channelKeys[target] ?? '';
-    } else {
-      keyToUse = _privateKeys[target] ?? '';
-    }
-    
-    // Encrypt the message
-    final encrypted = _encryptMessage(message, keyToUse);
-    
-    // Send as IRC message with encryption marker
-    _sendRawMessage('PRIVMSG $target :[E2E]$encrypted');
-    
-    // Add to local buffer
+  void _sendMessage(String target, String message) {
+    _sendEncryptedMessage('PRIVMSG $target :$message');
     _addMessage(
       to: target, 
       sender: _nickname, 
       content: message,
-      isEncrypted: true
+      isPrivate: !target.startsWith('#')
     );
-  }
-
-  void _sendRawMessage(String message) {
-    _channel?.sink.add(message);
-  }
-
-  String _encryptMessage(String message, String key) {
-    // Simple XOR encryption for demonstration
-    // In production, use proper AES encryption
-    if (key.isEmpty) key = 'default_key';
-    
-    final messageBytes = utf8.encode(message);
-    final keyBytes = utf8.encode(key);
-    final encrypted = <int>[];
-    
-    for (int i = 0; i < messageBytes.length; i++) {
-      encrypted.add(messageBytes[i] ^ keyBytes[i % keyBytes.length]);
-    }
-    
-    return base64.encode(encrypted);
-  }
-
-  String _decryptMessage(String encrypted, String key) {
-    if (key.isEmpty) key = 'default_key';
-    
-    final encryptedBytes = base64.decode(encrypted);
-    final keyBytes = utf8.encode(key);
-    final decrypted = <int>[];
-    
-    for (int i = 0; i < encryptedBytes.length; i++) {
-      decrypted.add(encryptedBytes[i] ^ keyBytes[i % keyBytes.length]);
-    }
-    
-    return utf8.decode(decrypted);
-  }
-
-  void _generateChannelKey(String channel) {
-    // Generate a random key for the channel
-    final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    _channelKeys[channel] = base64.encode(values);
-  }
-
-  void _generatePrivateKey(String user) {
-    // Generate a random key for private messages
-    final random = Random.secure();
-    final values = List<int>.generate(16, (i) => random.nextInt(256));
-    _privateKeys[user] = base64.encode(values);
-  }
-
-  void _announceEncryption(String channel) {
-    // Announce encryption support to the channel
-    _sendRawMessage('PRIVMSG $channel :[I2P Bridge] Encryption enabled 🔐');
   }
   
   void setCurrentBuffer(String bufferName) {
@@ -429,10 +425,11 @@ class IrcService with ChangeNotifier {
     _manualDisconnect = true;
     _reconnectTimer?.cancel();
     if (_isConnected) {
-      _sendRawMessage('QUIT :Leaving');
+      _sendEncryptedMessage('QUIT :Leaving');
       _channel?.sink.close();
     }
     _isConnected = false;
+    _encryptionReady = false;
     notifyListeners();
   }
 

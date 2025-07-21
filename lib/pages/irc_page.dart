@@ -1,5 +1,5 @@
 // lib/pages/irc_page.dart
-// Enhanced IRC page with encryption indicators
+// IRC page with privacy-focused design
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -14,7 +14,7 @@ class IrcPage extends StatefulWidget {
 }
 
 class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
-  final TextEditingController _channelController = TextEditingController(text: '#i2p');
+  final TextEditingController _channelController = TextEditingController(text: 'i2p');
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -59,36 +59,86 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
       mainAxisAlignment: MainAxisAlignment.center,
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Icon(Icons.lock, size: 80, color: Colors.green),
+        const Icon(Icons.chat_bubble_outline, size: 80, color: Colors.blueAccent),
         const SizedBox(height: 24),
-        const Text(
-          'Encrypted IRC Chat',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        const Text(
-          'Your messages are end-to-end encrypted',
-          textAlign: TextAlign.center,
-          style: TextStyle(color: Colors.grey),
+        // Privacy information box
+        Container(
+          margin: const EdgeInsets.symmetric(horizontal: 20),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.green.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.green.withOpacity(0.3)),
+          ),
+          child: Column(
+            children: const [
+              Icon(Icons.lock, color: Colors.green, size: 32),
+              SizedBox(height: 8),
+              Text(
+                'Privacy Protected IRC',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.green,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                '• Messages encrypted in transit',
+                style: TextStyle(fontSize: 14),
+              ),
+              Text(
+                '• No chat data is logged',
+                style: TextStyle(fontSize: 14),
+              ),
+              Text(
+                '• Your IP is hidden from IRC servers',
+                style: TextStyle(fontSize: 14),
+              ),
+              Text(
+                '• Anonymous connection statistics only',
+                style: TextStyle(fontSize: 14),
+              ),
+            ],
+          ),
         ),
         const SizedBox(height: 24),
-        Text('Connecting as: ${ircService.nickname}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
+        Text('Nickname: ${ircService.nickname}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
         const SizedBox(height: 16),
         TextField(
           controller: _channelController,
           decoration: const InputDecoration(
             labelText: 'Channel',
             border: OutlineInputBorder(),
-            hintText: '#channel',
-            prefixIcon: Icon(Icons.tag),
+            hintText: 'i2p',
+            prefixText: '#',
+            prefixStyle: TextStyle(color: Colors.grey, fontSize: 16),
           ),
+          onChanged: (value) {
+            // Remove any # that user types since we show it as prefix
+            if (value.startsWith('#')) {
+              _channelController.text = value.substring(1);
+              _channelController.selection = TextSelection.fromPosition(
+                TextPosition(offset: _channelController.text.length),
+              );
+            }
+          },
         ),
         const SizedBox(height: 24),
         ElevatedButton.icon(
-          onPressed: () => ircService.connect(_channelController.text),
-          icon: const Icon(Icons.lock),
-          label: const Text('Connect Securely', style: TextStyle(fontSize: 16)),
+          onPressed: () {
+            String channel = _channelController.text.trim();
+            // Ensure channel starts with #
+            if (channel.isNotEmpty && !channel.startsWith('#')) {
+              channel = '#$channel';
+            }
+            if (channel.isEmpty) {
+              channel = '#i2p'; // Default channel
+            }
+            ircService.connect(channel);
+          },
+          icon: const Icon(Icons.connect_without_contact),
+          label: const Text('Connect', style: TextStyle(fontSize: 16)),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
@@ -101,7 +151,7 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
     final currentMessages = ircService.currentBufferMessages;
     return Column(
       children: [
-        // Channel tabs with encryption indicators
+        // Channel tabs
         SizedBox(
           height: 40,
           child: ListView(
@@ -118,10 +168,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                   ),
                   child: Row(
                     children: [
-                      if (bufferName != 'Status')
-                        const Icon(Icons.lock, size: 14, color: Colors.green),
-                      if (bufferName != 'Status')
-                        const SizedBox(width: 4),
                       Text(bufferName),
                       if (ircService.unreadBuffers.contains(bufferName))
                         Container(
@@ -141,29 +187,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
           ),
         ),
         const SizedBox(height: 12),
-        // Encryption status bar
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: Colors.green.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.green.withOpacity(0.3)),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.lock, size: 16, color: Colors.green),
-              const SizedBox(width: 8),
-              Text(
-                ircService.currentBuffer == 'Status' 
-                  ? 'Server messages' 
-                  : 'End-to-end encrypted',
-                style: const TextStyle(fontSize: 12, color: Colors.green),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
         Expanded(
           child: Container(
             padding: const EdgeInsets.all(8.0),
@@ -176,50 +199,50 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
               itemCount: currentMessages.length,
               itemBuilder: (context, index) {
                 final msg = currentMessages[index];
-                if (msg.isNotice || msg.sender == 'Status') {
+                if (msg.isNotice || msg.sender == 'Status' || msg.sender == 'Server') {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4.0),
                     child: Text(
-                      '--- ${msg.content} ---',
+                      msg.sender == 'Server' ? msg.content : '--- ${msg.content} ---',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
+                      style: TextStyle(
+                        color: Colors.grey,
+                        fontStyle: FontStyle.italic,
+                        fontSize: msg.sender == 'Server' ? 12 : 14,
+                      ),
                     ),
                   );
                 }
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2.0),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // Encryption indicator
-                      Icon(
-                        msg.isEncrypted ? Icons.lock : Icons.lock_open,
-                        size: 12,
-                        color: msg.isEncrypted ? Colors.green : Colors.orange,
-                      ),
-                      const SizedBox(width: 4),
-                      Expanded(
-                        child: RichText(
-                          text: TextSpan(
-                            style: DefaultTextStyle.of(context).style.copyWith(fontSize: 15),
-                            children: <TextSpan>[
-                              TextSpan(
-                                text: '${DateFormat('HH:mm').format(msg.timestamp)} ',
-                                style: const TextStyle(color: Colors.grey),
-                              ),
-                              TextSpan(
-                                text: '${msg.sender}: ',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: ircService.getUserColor(msg.sender),
-                                ),
-                              ),
-                              TextSpan(text: msg.content),
-                            ],
-                          ),
+                  child: RichText(
+                    text: TextSpan(
+                      style: DefaultTextStyle.of(context).style.copyWith(fontSize: 15),
+                      children: <TextSpan>[
+                        TextSpan(
+                          text: '${DateFormat('HH:mm').format(msg.timestamp)} ',
+                          style: const TextStyle(color: Colors.grey, fontSize: 12),
                         ),
-                      ),
-                    ],
+                        if (msg.sender.startsWith('* '))
+                          TextSpan(
+                            text: msg.sender + ' ' + msg.content,
+                            style: TextStyle(
+                              color: ircService.getUserColor(msg.sender.substring(2)),
+                              fontStyle: FontStyle.italic,
+                            ),
+                          )
+                        else ...[
+                          TextSpan(
+                            text: '<${msg.sender}> ',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: ircService.getUserColor(msg.sender),
+                            ),
+                          ),
+                          TextSpan(text: msg.content),
+                        ],
+                      ],
+                    ),
                   ),
                 );
               },
@@ -233,9 +256,8 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
               child: TextField(
                 controller: _messageController,
                 decoration: InputDecoration(
-                  hintText: 'Encrypted message to ${ircService.currentBuffer}...',
+                  hintText: 'Message ${ircService.currentBuffer}...',
                   border: const OutlineInputBorder(),
-                  prefixIcon: const Icon(Icons.lock, size: 16, color: Colors.green),
                 ),
                 onSubmitted: (_) {
                   ircService.handleUserInput(_messageController.text);
@@ -261,12 +283,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             ),
           ],
         ),
-        // Help text
-        const SizedBox(height: 8),
-        Text(
-          'Use /key <password> to set a custom channel encryption key',
-          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
-        ),
         TextButton(
           onPressed: () => ircService.disconnect(),
           child: const Text('Disconnect'),
@@ -286,37 +302,33 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             title: Text('Users in ${ircService.currentBuffer}'),
             automaticallyImplyLeading: false,
           ),
-          Container(
-            padding: const EdgeInsets.all(12),
-            color: Colors.green.withOpacity(0.1),
-            child: Row(
-              children: const [
-                Icon(Icons.lock, size: 16, color: Colors.green),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Private messages are encrypted',
-                    style: TextStyle(fontSize: 12, color: Colors.green),
-                  ),
-                ),
-              ],
-            ),
-          ),
           Expanded(
             child: ListView.builder(
               itemCount: userList.length,
               itemBuilder: (context, index) {
                 final user = userList[index];
+                final cleanNick = user.replaceAll(RegExp(r'[@+~&%]'), '');
+                final isOp = user.startsWith('@');
+                final isVoice = user.startsWith('+');
+                
                 return ListTile(
-                  leading: const Icon(Icons.person, size: 20),
+                  leading: Icon(
+                    isOp ? Icons.star : (isVoice ? Icons.mic : Icons.person),
+                    size: 20,
+                    color: isOp ? Colors.orange : (isVoice ? Colors.green : null),
+                  ),
                   title: Text(user),
-                  subtitle: const Text('Tap to start encrypted chat', style: TextStyle(fontSize: 12)),
+                  subtitle: Text(
+                    isOp ? 'Operator' : (isVoice ? 'Voice' : 'User'),
+                    style: const TextStyle(fontSize: 12),
+                  ),
                   onTap: () {
-                    ircService.handleUserInput('/query $user');
+                    ircService.handleUserInput('/query $cleanNick');
                     Navigator.of(context).pop();
                   },
                   onLongPress: () {
-                    _showModeratorActions(context, ircService, user);
+                    if (isOp || isVoice) return; // Don't show mod actions for ops/voice
+                    _showModeratorActions(context, ircService, cleanNick);
                   },
                 );
               },
@@ -357,7 +369,7 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                 _showKickBanDialog(context, ircService, user, 'KICK');
               },
             ),
-             ListTile(
+            ListTile(
               leading: const Icon(Icons.block),
               title: const Text('Ban'),
               onTap: () {
