@@ -938,7 +938,8 @@ $body\r
     
     // First try to get boundary from Content-Type header
     if (contentType.isNotEmpty) {
-      final boundaryMatch = RegExp(r'boundary=(["\']?)([^"\';\s]+)\1').firstMatch(contentType);
+      final boundaryMatch =
+          RegExp(r"boundary=(['\"]?)([^'\";\s]+)\1").firstMatch(contentType);
       if (boundaryMatch != null) {
         boundary = boundaryMatch.group(2);
         _debug('Found boundary in Content-Type: $boundary');
@@ -947,8 +948,12 @@ $body\r
     
     // If not found, check if it's in a multiline Content-Type header
     if (boundary == null) {
-      final contentTypeFullMatch = RegExp(r'Content-Type:.*?boundary=(["\']?)([^"\';\s]+)\1', 
-          caseSensitive: false, multiLine: true, dotAll: true).firstMatch(headers);
+      final contentTypeFullMatch = RegExp(
+              r"Content-Type:.*?boundary=(['\"]?)([^'\";\s]+)\1",
+              caseSensitive: false,
+              multiLine: true,
+              dotAll: true)
+          .firstMatch(headers);
       if (contentTypeFullMatch != null) {
         boundary = contentTypeFullMatch.group(2);
         _debug('Found boundary in full headers: $boundary');
