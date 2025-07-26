@@ -641,13 +641,17 @@ class Pop3MailService with ChangeNotifier {
           if (headerEndIndex + 1 < messageLines.length) {
             body = messageLines.sublist(headerEndIndex + 1).join('\n').trim();
             
-            // Check if this is a multipart message - either by content type or by boundary markers
+            // Check if this is a multipart message
             final contentType = _extractHeader(headers, 'Content-Type:');
+            _debug('Content-Type extracted: $contentType');
+            
             if (contentType.contains('multipart/') || body.contains('------WEI3KH1ZHXE3MB23OXFMHFSXNKO9XW')) {
-              body = _parseMultipartMessage(body, contentType);
+              _debug('Detected multipart message, parsing...');
+              body = _parseMultipartMessage(body, contentType, headers);
             }
           }
         } else {
+          // No clear header/body separation found
           headers = messageLines.join('\n');
           final dateIndex = headers.lastIndexOf('Date:');
           if (dateIndex >= 0) {
@@ -659,7 +663,8 @@ class Pop3MailService with ChangeNotifier {
               
               // Check if body looks like multipart
               if (body.contains('------WEI3KH1ZHXE3MB23OXFMHFSXNKO9XW')) {
-                body = _parseMultipartMessage(body, '');
+                final contentType = _extractHeader(headers, 'Content-Type:');
+                body = _parseMultipartMessage(body, contentType, headers);
               }
             }
           }
@@ -927,54 +932,88 @@ $body\r
   }
 
   // Parse multipart messages
-  String _parseMultipartMessage(String body, String contentType) {
-    // Extract boundary from content type
-    final boundaryMatch = RegExp(r'boundary="?([^";\s]+)"?').firstMatch(contentType);
-    if (boundaryMatch == null) {
-      // If no boundary found, check if body looks like multipart anyway
-      if (body.contains('------WEI3KH1ZHXE3MB23OXFMHFSXNKO9XW')) {
-        return _parseMultipartWithKnownBoundary(body, '------WEI3KH1ZHXE3MB23OXFMHFSXNKO9XW');
+  String _parseMultipartMessage(String body, String contentType, String headers) {
+    // Extract boundary from content type or headers
+    String? boundary;
+    
+    // First try to get boundary from Content-Type header
+    if (contentType.isNotEmpty) {
+      final boundaryMatch = RegExp(r'boundary=(["\']?)([^"\';\s]+)\1').firstMatch(contentType);
+      if (boundaryMatch != null) {
+        boundary = boundaryMatch.group(2);
+        _debug('Found boundary in Content-Type: $boundary');
       }
+    }
+    
+    // If not found, check if it's in a multiline Content-Type header
+    if (boundary == null) {
+      final contentTypeFullMatch = RegExp(r'Content-Type:.*?boundary=(["\']?)([^"\';\s]+)\1', 
+          caseSensitive: false, multiLine: true, dotAll: true).firstMatch(headers);
+      if (contentTypeFullMatch != null) {
+        boundary = contentTypeFullMatch.group(2);
+        _debug('Found boundary in full headers: $boundary');
+      }
+    }
+    
+    // If still no boundary found but body contains the known boundary
+    if (boundary == null && body.contains('------WEI3KH1ZHXE3MB23OXFMHFSXNKO9XW')) {
+      boundary = '----WEI3KH1ZHXE3MB23OXFMHFSXNKO9XW';
+      _debug('Using known boundary: $boundary');
+    }
+    
+    if (boundary == null) {
+      _debug('No boundary found, returning original body');
       return body;
     }
     
-    final boundary = boundaryMatch.group(1)!;
-    return _parseMultipartWithKnownBoundary(body, boundary);
-  }
-  
-  String _parseMultipartWithKnownBoundary(String body, String boundary) {
-    final parts = body.split(boundary);
+    // Parse parts using the boundary
+    final boundaryDelimiter = '--$boundary';
+    final boundaryEnd = '--$boundary--';
+    
+    // Split by boundary
+    final parts = body.split(boundaryDelimiter);
+    
+    _debug('Found ${parts.length} parts with boundary $boundary');
     
     // Look for text/plain part first, then text/html
     String textContent = '';
     String htmlContent = '';
     
-    for (final part in parts) {
-      if (part.trim().isEmpty || part.contains('--')) continue;
+    for (int i = 0; i < parts.length; i++) {
+      final part = parts[i].trim();
+      if (part.isEmpty || part == '--') continue;
       
+      _debug('Processing part $i');
+      
+      // Split part into headers and body
       final partLines = part.split('\n');
       int partHeaderEnd = -1;
       
-      // Find where part headers end
-      for (int i = 0; i < partLines.length; i++) {
-        if (partLines[i].trim().isEmpty) {
-          partHeaderEnd = i;
+      // Find where part headers end (empty line)
+      for (int j = 0; j < partLines.length; j++) {
+        if (partLines[j].trim().isEmpty) {
+          partHeaderEnd = j;
           break;
         }
       }
       
-      if (partHeaderEnd > 0) {
+      if (partHeaderEnd >= 0) {
         final partHeaders = partLines.sublist(0, partHeaderEnd).join('\n');
         final partBody = partLines.sublist(partHeaderEnd + 1).join('\n').trim();
         
+        _debug('Part headers: ${partHeaders.substring(0, Math.min(100, partHeaders.length))}...');
+        
+        // Check content type of this part
         if (partHeaders.toLowerCase().contains('content-type: text/plain')) {
-          // Decode quoted-printable if needed
+          _debug('Found text/plain part');
+          // Decode based on content transfer encoding
           if (partHeaders.toLowerCase().contains('quoted-printable')) {
             textContent = _decodeQuotedPrintable(partBody);
           } else {
             textContent = partBody;
           }
         } else if (partHeaders.toLowerCase().contains('content-type: text/html')) {
+          _debug('Found text/html part');
           if (partHeaders.toLowerCase().contains('quoted-printable')) {
             htmlContent = _decodeQuotedPrintable(partBody);
           } else {
@@ -984,32 +1023,69 @@ $body\r
       }
     }
     
-    // Prefer plain text, fall back to HTML stripped of tags
+    // Prefer plain text over HTML
     if (textContent.isNotEmpty) {
+      _debug('Returning plain text content');
       return textContent;
     } else if (htmlContent.isNotEmpty) {
-      // Basic HTML stripping
-      return htmlContent
-        .replaceAll(RegExp(r'<[^>]*>'), ' ')
-        .replaceAll(RegExp(r'\s+'), ' ')
+      _debug('Converting HTML to plain text');
+      // Basic HTML to text conversion
+      String plainText = htmlContent;
+      
+      // Remove style and script tags with their content
+      plainText = plainText.replaceAll(RegExp(r'<style[^>]*>.*?</style>', 
+          caseSensitive: false, multiLine: true, dotAll: true), '');
+      plainText = plainText.replaceAll(RegExp(r'<script[^>]*>.*?</script>', 
+          caseSensitive: false, multiLine: true, dotAll: true), '');
+      
+      // Replace common block elements with newlines
+      plainText = plainText.replaceAll(RegExp(r'</?(p|div|br|h[1-6])[^>]*>', 
+          caseSensitive: false), '\n');
+      
+      // Remove all other HTML tags
+      plainText = plainText.replaceAll(RegExp(r'<[^>]*>'), '');
+      
+      // Decode HTML entities
+      plainText = plainText
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
         .replaceAll('&amp;', '&')
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
         .replaceAll('&nbsp;', ' ')
-        .trim();
+        .replaceAll('&#8217;', "'")
+        .replaceAll('&#8220;', '"')
+        .replaceAll('&#8221;', '"');
+        
+      // Clean up extra whitespace
+      plainText = plainText.replaceAll(RegExp(r'\n\s*\n\s*\n'), '\n\n');
+      plainText = plainText.trim();
+      
+      return plainText;
     }
     
+    _debug('No text or HTML content found, returning original body');
     return body;
   }
   
   // Decode quoted-printable encoding
   String _decodeQuotedPrintable(String input) {
-    return input.replaceAllMapped(
-      RegExp(r'=([0-9A-F]{2})'),
-      (match) => String.fromCharCode(int.parse(match.group(1)!, radix: 16)),
-    ).replaceAll('=\n', '');
+    String decoded = input;
+    
+    // Replace soft line breaks (= at end of line)
+    decoded = decoded.replaceAll('=\r\n', '');
+    decoded = decoded.replaceAll('=\n', '');
+    
+    // Decode hex sequences
+    decoded = decoded.replaceAllMapped(
+      RegExp(r'=([0-9A-Fa-f]{2})'),
+      (match) {
+        final hex = match.group(1)!;
+        return String.fromCharCode(int.parse(hex, radix: 16));
+      },
+    );
+    
+    return decoded;
   }
   
   // Format reply email
