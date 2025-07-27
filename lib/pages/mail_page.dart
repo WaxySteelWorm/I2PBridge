@@ -84,7 +84,7 @@ class _MailPageState extends State<MailPage> {
                   style: TextStyle(fontSize: 13),
                 ),
                 Text(
-                  '• Messages stay on server',
+                  '• Messages parsed server-side for security',
                   style: TextStyle(fontSize: 13),
                 ),
                 Text(
@@ -133,7 +133,6 @@ class _MailPageState extends State<MailPage> {
               }
               
               final success = await mailService.connect(username, password);
-              
               if (!success && mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
@@ -161,91 +160,9 @@ class _MailPageState extends State<MailPage> {
               padding: const EdgeInsets.symmetric(vertical: 16),
             ),
           ),
-          if (mailService.statusMessage.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.blue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.blue.withOpacity(0.3)),
-              ),
-              child: Row(
-                children: [
-                  const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: Colors.blue,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      mailService.statusMessage,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.blue,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          _buildStatusMessage(mailService),
+          _buildDebugSection(mailService),
           const SizedBox(height: 16),
-          // Debug toggle
-          if (mailService.debugMode)
-            TextButton.icon(
-              onPressed: () {
-                showModalBottomSheet(
-                  context: context,
-                  isScrollControlled: true,
-                  builder: (context) => Container(
-                    height: MediaQuery.of(context).size.height * 0.7,
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text(
-                              'Debug Log',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.close),
-                              onPressed: () => Navigator.pop(context),
-                            ),
-                          ],
-                        ),
-                        const Divider(),
-                        Expanded(
-                          child: ListView.builder(
-                            itemCount: mailService.debugLog.length,
-                            itemBuilder: (context, index) {
-                              return Text(
-                                mailService.debugLog[index],
-                                style: const TextStyle(
-                                  fontFamily: 'monospace',
-                                  fontSize: 12,
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.bug_report),
-              label: Text('View Debug Log (${mailService.debugLog.length})'),
-            ),
           const Text(
             'Need an account? Create one at:\nhttp://127.0.0.1:7657/susimail/',
             textAlign: TextAlign.center,
@@ -253,6 +170,109 @@ class _MailPageState extends State<MailPage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildStatusMessage(Pop3MailService mailService) {
+    if (mailService.statusMessage.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Column(
+      children: [
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.blue,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  mailService.statusMessage,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.blue,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDebugSection(Pop3MailService mailService) {
+    if (!mailService.debugMode || mailService.debugLog.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Column(
+      children: [
+        const SizedBox(height: 16),
+        TextButton.icon(
+          onPressed: () {
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              builder: (context) => Container(
+                height: MediaQuery.of(context).size.height * 0.7,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Debug Log',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                    const Divider(),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: mailService.debugLog.length,
+                        itemBuilder: (context, index) {
+                          return Text(
+                            mailService.debugLog[index],
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+          icon: const Icon(Icons.bug_report),
+          label: Text('View Debug Log (${mailService.debugLog.length})'),
+        ),
+      ],
     );
   }
   
@@ -279,9 +299,9 @@ class _MailPageState extends State<MailPage> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     'Inbox',
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
@@ -312,156 +332,9 @@ class _MailPageState extends State<MailPage> {
         Expanded(
           child: Column(
             children: [
-              // Loading indicator
-              if (mailService.statusMessage.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    children: [
-                      const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.blue,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          mailService.statusMessage,
-                          style: const TextStyle(
-                            fontSize: 13,
-                            color: Colors.blue,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              // Message list
+              _buildLoadingIndicator(mailService),
               Expanded(
-                child: mailService.isLoading && mailService.messages.isEmpty
-                  ? const Center(
-                      child: CircularProgressIndicator(),
-                    )
-                  : mailService.messages.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.inbox,
-                              size: 64,
-                              color: Colors.grey.shade400,
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              'No messages',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: () => mailService.refresh(),
-                        child: ListView.builder(
-                          itemCount: mailService.messages.length,
-                          itemBuilder: (context, index) {
-                            final message = mailService.messages[index];
-                            return Card(
-                              margin: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              child: ListTile(
-                                leading: CircleAvatar(
-                                  backgroundColor: Colors.blueAccent.withOpacity(0.2),
-                                  child: Text(
-                                    message.from.isNotEmpty 
-                                      ? message.from[0].toUpperCase()
-                                      : '?',
-                                    style: const TextStyle(
-                                      color: Colors.blueAccent,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                                title: Text(
-                                  message.from,
-                                  style: TextStyle(
-                                    fontWeight: message.isRead 
-                                      ? FontWeight.normal 
-                                      : FontWeight.bold,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                subtitle: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      message.subject,
-                                      style: TextStyle(
-                                        fontWeight: message.isRead 
-                                          ? FontWeight.normal 
-                                          : FontWeight.w500,
-                                      ),
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    Text(
-                                      message.date,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Colors.grey.shade600,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                trailing: Icon(
-                                  message.isRead 
-                                    ? Icons.mail_outline 
-                                    : Icons.mark_email_unread,
-                                  size: 20,
-                                  color: message.isRead 
-                                    ? Colors.grey 
-                                    : Colors.blueAccent,
-                                ),
-                                onTap: () async {
-                                  // Load full message
-                                  final fullMessage = await mailService.getMessage(message.id);
-                                  if (fullMessage != null && mounted) {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (context) => ReadMailPage(
-                                          message: fullMessage,
-                                          mailService: mailService,
-                                        ),
-                                      ),
-                                    );
-                                    
-                                    // Mark as read in list
-                                    setState(() {
-                                      message.isRead = true;
-                                    });
-                                  }
-                                },
-                              ),
-                            );
-                          },
-                        ),
-                      ),
+                child: _buildMessageList(mailService),
               ),
             ],
           ),
@@ -489,6 +362,177 @@ class _MailPageState extends State<MailPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildLoadingIndicator(Pop3MailService mailService) {
+    if (mailService.statusMessage.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.blue,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              mailService.statusMessage,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.blue,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageList(Pop3MailService mailService) {
+    if (mailService.isLoading && mailService.messages.isEmpty) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+    
+    if (mailService.messages.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.inbox,
+              size: 64,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No messages',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    return RefreshIndicator(
+      onRefresh: () => mailService.refresh(),
+      child: ListView.builder(
+        itemCount: mailService.messages.length,
+        itemBuilder: (context, index) {
+          final message = mailService.messages[index];
+          return Card(
+            margin: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: 4,
+            ),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.blueAccent.withOpacity(0.2),
+                child: Text(
+                  message.from.isNotEmpty 
+                    ? message.from[0].toUpperCase()
+                    : '?',
+                  style: const TextStyle(
+                    color: Colors.blueAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              title: Text(
+                message.from,
+                style: TextStyle(
+                  fontWeight: message.isRead 
+                    ? FontWeight.normal 
+                    : FontWeight.bold,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    message.subject,
+                    style: TextStyle(
+                      fontWeight: message.isRead 
+                        ? FontWeight.normal 
+                        : FontWeight.w500,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    message.date,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+              trailing: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    message.isRead 
+                      ? Icons.mail_outline 
+                      : Icons.mark_email_unread,
+                    size: 20,
+                    color: message.isRead 
+                      ? Colors.grey 
+                      : Colors.blueAccent,
+                  ),
+                  if (message.attachments.isNotEmpty)
+                    const Icon(
+                      Icons.attach_file,
+                      size: 14,
+                      color: Colors.grey,
+                    ),
+                ],
+              ),
+              onTap: () async {
+                // Load full message
+                final fullMessage = await mailService.getMessage(message.id);
+                if (fullMessage != null && mounted) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ReadMailPage(
+                        message: fullMessage,
+                        mailService: mailService,
+                      ),
+                    ),
+                  );
+                  
+                  // Mark as read in list
+                  setState(() {
+                    message.isRead = true;
+                  });
+                }
+              },
+            ),
+          );
+        },
+      ),
     );
   }
 }
