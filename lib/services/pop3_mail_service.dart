@@ -1,13 +1,11 @@
 // lib/services/pop3_mail_service.dart
-// Updated POP3/SMTP client using server-side mail parsing
+// Mail service using server-side parsing and HTTP API
 
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 class EmailMessage {
   final String id;
@@ -61,8 +59,7 @@ class EmailAttachment {
 }
 
 class Pop3MailService with ChangeNotifier {
-  Socket? _pop3Socket;
-  Socket? _smtpSocket;
+  Socket? _smtpSocket; // Keep SMTP for sending emails
   
   bool _isConnected = false;
   bool _isLoading = false;
@@ -75,10 +72,9 @@ class Pop3MailService with ChangeNotifier {
   String _statusMessage = '';
   String _lastError = '';
   
-  // Server-side parsing configuration
+  // Server configuration
   static const String _serverBaseUrl = 'http://bridge.stormycloud.org:3000';
   static const String _serverHost = 'bridge.stormycloud.org';
-  static const int _pop3Port = 8110;
   static const int _smtpPort = 8025;
   
   // Debug mode
@@ -93,10 +89,6 @@ class Pop3MailService with ChangeNotifier {
   int get totalMessages => _totalMessages;
   String get statusMessage => _statusMessage;
   String get lastError => _lastError;
-
-  // Response handling for POP3 commands
-  final StreamController<String> _responseController = StreamController<String>.broadcast();
-  String _commandBuffer = '';
 
   Pop3MailService();
 
@@ -118,10 +110,10 @@ class Pop3MailService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Test server connection and authentication
+  // Connect using server-side API
   Future<bool> connect(String username, String password) async {
     try {
-      _debug('=== Testing Server-Side Mail Parsing ===');
+      _debug('=== Connecting via Server API ===');
       _debug('Username: $username');
       
       _isLoading = true;
@@ -131,308 +123,243 @@ class Pop3MailService with ChangeNotifier {
       debugLog.clear();
       _updateStatus('Testing connection...');
 
-      // Test connection by fetching message count via POP3
-      _debug('Connecting to POP3 server for authentication test...');
-      _pop3Socket = await Socket.connect(
-        _serverHost, 
-        _pop3Port,
-        timeout: const Duration(seconds: 90),
-      );
-      _debug('Socket connected successfully');
-      
-      _pop3Socket!.setOption(SocketOption.tcpNoDelay, true);
-      
-      _pop3Socket!.listen(
-        (data) {
-          final response = utf8.decode(data);
-          _debug('RAW RECEIVE: ${response.replaceAll('\r\n', '\\r\\n')}');
-          
-          _commandBuffer += response;
-          final lines = _commandBuffer.split('\r\n');
-          _commandBuffer = lines.last;
-          
-          for (int i = 0; i < lines.length - 1; i++) {
-            if (lines[i].isNotEmpty) {
-              _debug('RESPONSE: ${lines[i]}');
-              _responseController.add(lines[i]);
-            }
-          }
-        },
-        onError: (error) {
-          _debug('SOCKET ERROR: $error');
-          _isConnected = false;
-          _lastError = 'Connection error: $error';
-          notifyListeners();
-        },
-        onDone: () {
-          _debug('Socket closed by server');
-        },
-      );
-
-      // Authenticate via POP3
+      _debug('Testing connection via server API...');
       _updateStatus('Authenticating...');
-      final greeting = await _waitForResponse(
-        timeout: const Duration(seconds: 90),
-        context: 'greeting',
-      );
       
-      if (!greeting.startsWith('+OK')) {
-        throw Exception('Invalid server greeting');
+      final response = await http.get(
+        Uri.parse('$_serverBaseUrl/api/v1/mail/headers')
+            .replace(queryParameters: {
+          'user': username,
+          'pass': password,
+          'start': '1',
+          'count': '1',
+        }),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        _debug('Authentication successful! Found ${data['messageCount'] ?? 0} messages');
+        
+        _isConnected = true;
+        _updateStatus('Connected successfully');
+        notifyListeners();
+
+        // Get the full message list
+        await _updateMessageList();
+        
+        _isLoading = false;
+        _updateStatus('');
+        return true;
+      } else {
+        _debug('ERROR: Server returned ${response.statusCode}');
+        if (response.statusCode == 500) {
+          _lastError = 'Invalid username or password';
+        } else {
+          _lastError = 'Connection failed: ${response.statusCode}';
+        }
       }
-
-      await _sendCommand('USER $username');
-      final userResponse = await _waitForResponse(
-        timeout: const Duration(seconds: 60),
-        context: 'USER response',
-      );
-      
-      if (!userResponse.startsWith('+OK')) {
-        throw Exception('Invalid username');
-      }
-
-      await _sendCommand('PASS $password');
-      final passResponse = await _waitForResponse(
-        timeout: const Duration(seconds: 60),
-        context: 'PASS response',
-      );
-      
-      if (!passResponse.startsWith('+OK')) {
-        throw Exception('Invalid password');
-      }
-
-      _debug('Authentication successful!');
-      _isConnected = true;
-      _updateStatus('Connected successfully');
-      notifyListeners();
-
-      // Get message count and headers
-      await _updateMessageList();
-      
-      _isLoading = false;
-      _updateStatus('');
-      return true;
     } catch (e) {
       _debug('CONNECTION ERROR: $e');
       
       if (e.toString().contains('TimeoutException')) {
-        _lastError = 'Connection timeout - I2P mail servers are slow, please try again';
-      } else if (e.toString().contains('Invalid password')) {
+        _lastError = 'Connection timeout - please try again';
+      } else if (e.toString().contains('Authentication failed')) {
         _lastError = 'Invalid username or password';
-      } else if (e.toString().contains('Invalid username')) {
-        _lastError = 'Invalid username';
       } else {
         _lastError = 'Connection failed: ${e.toString()}';
       }
-      
-      _isLoading = false;
-      _isConnected = false;
-      _updateStatus('');
-      notifyListeners();
-      return false;
-    }
-  }
-
-  Future<void> _sendCommand(String command) async {
-    if (_pop3Socket == null) return;
-    
-    String debugCommand = command;
-    if (command.startsWith('PASS ')) {
-      debugCommand = 'PASS ****';
     }
     
-    _debug('SEND: $debugCommand');
-    _pop3Socket!.write('$command\r\n');
+    _isLoading = false;
+    _isConnected = false;
+    _updateStatus('');
+    notifyListeners();
+    return false;
   }
 
-  Future<String> _waitForResponse({
-    Duration timeout = const Duration(seconds: 30),
-    String context = '',
-  }) async {
-    try {
-      _debug('Waiting for response ($context)...');
-      final response = await _responseController.stream.first.timeout(
-        timeout,
-        onTimeout: () {
-          _debug('TIMEOUT waiting for $context');
-          throw TimeoutException('POP3 response timeout for $context');
-        },
-      );
-      return response;
-    } catch (e) {
-      _debug('ERROR in _waitForResponse: $e');
-      rethrow;
-    }
-  }
-
-  // Get message list using traditional POP3 for headers, then server parsing for bodies
+  // Get message list using server-side header fetching with prefetching
   Future<void> _updateMessageList() async {
-    if (!_isConnected) return;
+    if (!_isConnected || _username == null || _password == null) return;
     
     _isLoading = true;
-    _updateStatus('Checking for messages...');
+    _updateStatus('Loading messages...');
     notifyListeners();
 
     try {
-      // Get message count with STAT
-      await _sendCommand('STAT');
-      final statResponse = await _waitForResponse(
-        timeout: const Duration(seconds: 60),
-        context: 'STAT response',
-      );
+      _debug('Fetching message headers from server API...');
       
-      if (statResponse.startsWith('+OK')) {
-        final parts = statResponse.split(' ');
-        _totalMessages = int.tryParse(parts[1]) ?? 0;
-        _debug('STAT response: $_totalMessages messages');
-      } else {
-        _totalMessages = 0;
-      }
-
-      if (_totalMessages == 0) {
-        _messages = [];
-        _isLoading = false;
-        _updateStatus('');
-        notifyListeners();
-        return;
-      }
-
-      // Get message headers using POP3 TOP command
-      _messages.clear();
-      final startIndex = _totalMessages > 50 ? _totalMessages - 49 : 1;
+      final response = await http.get(
+        Uri.parse('$_serverBaseUrl/api/v1/mail/headers')
+            .replace(queryParameters: {
+          'user': _username!,
+          'pass': _password!,
+          'start': '1',
+          'count': '50',
+        }),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 45));
       
-      for (int i = _totalMessages; i >= startIndex; i--) {
-        _statusMessage = 'Loading message ${_totalMessages - i + 1} of ${_totalMessages - startIndex + 1}...';
-        notifyListeners();
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        _debug('Received headers for ${data['messages']?.length ?? 0} messages');
         
-        try {
-          await _sendCommand('TOP $i 0');
-          final headerLines = await _collectHeaderResponse();
-          
-          if (headerLines.isNotEmpty) {
-            final headers = headerLines.join('\n');
-            final from = _extractHeader(headers, 'From:');
-            final subject = _extractHeader(headers, 'Subject:');
-            final date = _extractHeader(headers, 'Date:');
-            
-            _messages.add(EmailMessage(
-              id: i.toString(),
-              from: from.isNotEmpty ? from : 'Unknown',
-              subject: subject.isNotEmpty ? subject : '(No Subject)',
-              date: date.isNotEmpty ? _formatDate(date) : 'Unknown date',
-              body: '', // Will be loaded using server-side parsing
+        _messages.clear();
+        _totalMessages = data['messageCount'] ?? 0;
+        
+        if (data['messages'] != null) {
+          for (final messageData in data['messages']) {
+            final emailMessage = EmailMessage(
+              id: messageData['number'].toString(),
+              from: messageData['from'] ?? 'Unknown',
+              subject: messageData['subject'] ?? '(No Subject)',
+              date: _formatServerDate(messageData['date']),
+              body: '', // Will be loaded on demand
               size: 0,
               isRead: false,
               isPreloaded: false,
-            ));
+            );
             
-            notifyListeners();
+            _messages.add(emailMessage);
           }
-        } catch (e) {
-          _debug('ERROR fetching message $i: $e');
         }
         
-        await Future.delayed(const Duration(milliseconds: 100));
+        _debug('Loaded ${_messages.length} message headers successfully');
+        _isLoading = false;
+        _updateStatus('');
+        notifyListeners();
+        
+        // Start prefetching top 10 messages in background
+        _prefetchRecentMessages();
+        
+      } else {
+        _debug('ERROR: Server returned ${response.statusCode}: ${response.body}');
+        throw Exception('Server error: ${response.statusCode}');
       }
-
-      _debug('Fetched ${_messages.length} message headers successfully');
-      _statusMessage = 'Loaded ${_messages.length} messages successfully!';
+      
+    } catch (e) {
+      _debug('ERROR fetching headers from server: $e');
       _isLoading = false;
+      
+      // Set user-friendly error message
+      if (e.toString().contains('TimeoutException')) {
+        _lastError = 'Loading messages timed out. I2P network is slow - please try again.';
+        _updateStatus('Timeout - please try refreshing');
+      } else {
+        _lastError = 'Failed to load messages: ${e.toString()}';
+        _updateStatus('Error loading messages');
+      }
+      
       notifyListeners();
       
-      Future.delayed(const Duration(seconds: 2), () {
-        _statusMessage = '';
+      // Clear error status after a delay
+      Future.delayed(const Duration(seconds: 5), () {
+        _updateStatus('');
         notifyListeners();
       });
-      
-    } catch (e) {
-      _debug('ERROR updating message list: $e');
-      _isLoading = false;
-      _updateStatus('');
-      notifyListeners();
     }
   }
 
-  Future<List<String>> _collectHeaderResponse() async {
-    final List<String> responseBuffer = [];
+  // Prefetch the most recent messages in background
+  Future<void> _prefetchRecentMessages() async {
+    if (_messages.isEmpty) return;
     
-    while (true) {
+    _debug('Starting background prefetch of recent messages...');
+    
+    // Get the top 5 most recent messages (reduced from 10 to avoid overwhelming I2P)
+    final messagesToPrefetch = _messages.take(5).toList();
+    
+    int successCount = 0;
+    int maxAttempts = 3; // Limit attempts to avoid endless retries
+    
+    for (final message in messagesToPrefetch) {
+      if (!_isConnected) break; // Stop if disconnected
+      if (message.isPreloaded) continue; // Skip already loaded
+      if (successCount >= maxAttempts) break; // Don't overload the server
+      
       try {
-        final line = await _responseController.stream.first.timeout(
-          const Duration(seconds: 5),
-        );
+        _debug('Prefetching message ${message.id}...');
+        final fullMessage = await _fetchMessageSilently(message.id);
         
-        if (line == '.') {
-          break;
+        if (fullMessage != null) {
+          message.body = fullMessage.body;
+          message.htmlBody = fullMessage.htmlBody;
+          message.isPreloaded = true;
+          successCount++;
+          _debug('Prefetched message ${message.id} successfully');
         }
         
-        responseBuffer.add(line);
+        // Longer delay to be nice to I2P network
+        await Future.delayed(const Duration(milliseconds: 1000));
       } catch (e) {
-        break;
+        _debug('Error prefetching message ${message.id}: $e');
+        // Continue with next message instead of stopping
       }
     }
     
-    // Remove the +OK line if present
-    if (responseBuffer.isNotEmpty && responseBuffer[0].startsWith('+OK')) {
-      responseBuffer.removeAt(0);
-    }
-    
-    return responseBuffer;
+    _debug('Finished prefetching recent messages (${successCount} successful)');
   }
 
-  String _extractHeader(String headers, String headerName) {
-    final lines = headers.split('\n');
-    String headerValue = '';
-    bool inHeader = false;
+  // Fetch message without updating UI status - more resilient version
+  Future<EmailMessage?> _fetchMessageSilently(String messageId) async {
+    if (!_isConnected || _username == null || _password == null) return null;
     
-    for (int i = 0; i < lines.length; i++) {
-      final line = lines[i];
-      
-      if (line.toLowerCase().startsWith(headerName.toLowerCase())) {
-        headerValue = line.substring(headerName.length).trim();
-        inHeader = true;
-        continue;
-      }
-      
-      if (inHeader) {
-        if (line.startsWith(' ') || line.startsWith('\t')) {
-          headerValue += ' ' + line.trim();
-        } else {
-          break;
-        }
-      }
-    }
-    
-    // Handle encrypted subjects
-    if (headerName.toLowerCase() == 'subject:' && headerValue == '...') {
-      return '(Encrypted)';
-    }
-    
-    // Clean up from addresses
-    if (headerName.toLowerCase() == 'from:') {
-      final match = RegExp(r'<([^>]+)>').firstMatch(headerValue);
-      if (match != null) {
-        final email = match.group(1);
-        final name = headerValue.substring(0, match.start).trim();
-        return name.isNotEmpty ? name : email ?? headerValue;
-      }
-      headerValue = headerValue.replaceAll('"', '');
-    }
-    
-    return headerValue;
-  }
-
-  String _formatDate(String dateStr) {
     try {
-      final cleanDate = dateStr.replaceAll(RegExp(r'\s*\(.*\)'), '').trim();
-      if (cleanDate.contains(',')) {
-        final parts = cleanDate.split(',');
-        if (parts.length > 1) {
-          return parts[1].trim().split(' ').take(3).join(' ');
+      final response = await http.get(
+        Uri.parse('$_serverBaseUrl/api/v1/mail/parsed')
+            .replace(queryParameters: {
+          'user': _username!,
+          'pass': _password!,
+          'msg': messageId,
+        }),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 15)); // Shorter timeout for prefetching
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        
+        final List<EmailAttachment> attachments = [];
+        if (data['attachments'] != null) {
+          for (final attachmentData in data['attachments']) {
+            attachments.add(EmailAttachment.fromJson(attachmentData));
+          }
         }
+        
+        return EmailMessage(
+          id: messageId,
+          from: data['from']?.toString() ?? 'Unknown',
+          subject: data['subject']?.toString() ?? '(No Subject)',
+          date: _formatServerDate(data['date']),
+          body: data['text']?.toString() ?? '(No content)',
+          htmlBody: _safeGetString(data['html']),
+          size: (data['text']?.toString().length ?? 0) + (_safeGetString(data['html'])?.length ?? 0),
+          isRead: true,
+          isPreloaded: true,
+          attachments: attachments,
+        );
       }
-      return cleanDate;
     } catch (e) {
-      return dateStr;
+      // Silent failure for prefetching - don't spam logs
+      return null;
+    }
+    return null;
+  }
+
+  // Safely get string value from dynamic data
+  String? _safeGetString(dynamic value) {
+    if (value == null || value == false) return null;
+    if (value is String && value.isNotEmpty) return value;
+    return null;
+  }
+
+  String _formatServerDate(dynamic dateData) {
+    if (dateData == null) return 'Unknown date';
+    
+    try {
+      final DateTime date = DateTime.parse(dateData.toString());
+      return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
+    } catch (e) {
+      return dateData.toString();
     }
   }
 
@@ -441,6 +368,24 @@ class Pop3MailService with ChangeNotifier {
     if (!_isConnected || _username == null || _password == null) {
       _debug('ERROR: Not connected or missing credentials');
       return null;
+    }
+    
+    // Check if message is already prefetched
+    final existingMessage = _messages.firstWhere(
+      (msg) => msg.id == messageId,
+      orElse: () => EmailMessage(
+        id: '', 
+        from: '', 
+        subject: '', 
+        date: '', 
+        body: '', 
+        size: 0,
+      ),
+    );
+    
+    if (existingMessage.id.isNotEmpty && existingMessage.isPreloaded && existingMessage.body.isNotEmpty) {
+      _debug('Using prefetched message body for message $messageId');
+      return existingMessage;
     }
     
     _updateStatus('Loading message...');
@@ -506,70 +451,48 @@ class Pop3MailService with ChangeNotifier {
     }
   }
 
-  // Safely get string value from dynamic data
-  String? _safeGetString(dynamic value) {
-    if (value == null || value == false) return null;
-    if (value is String && value.isNotEmpty) return value;
-    return null;
-  }
-
-  String _formatServerDate(dynamic dateData) {
-    if (dateData == null) return 'Unknown date';
-    
-    try {
-      final DateTime date = DateTime.parse(dateData.toString());
-      return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
-    } catch (e) {
-      return dateData.toString();
-    }
-  }
-
-  // Delete message
+  // Delete message using server API with proper POP3 deletion
   Future<bool> deleteMessage(String messageId) async {
-    if (!_isConnected) return false;
+    if (!_isConnected || _username == null || _password == null) {
+      _debug('ERROR: Not connected, cannot delete message');
+      return false;
+    }
     
     try {
-      _debug('Deleting message $messageId...');
-      _updateStatus('Deleting message...');
+      _debug('Deleting message $messageId via server...');
       
-      await _sendCommand('DELE $messageId');
-      final response = await _waitForResponse(
-        timeout: const Duration(seconds: 30),
-        context: 'DELE response',
-      );
+      final response = await http.delete(
+        Uri.parse('$_serverBaseUrl/api/v1/mail/$messageId')
+            .replace(queryParameters: {
+          'user': _username!,
+          'pass': _password!,
+        }),
+        headers: {'Accept': 'application/json'},
+      ).timeout(const Duration(seconds: 30));
       
-      if (response.startsWith('+OK')) {
-        final message = _messages.firstWhere(
-          (msg) => msg.id == messageId,
-          orElse: () => EmailMessage(
-            id: '', 
-            from: '', 
-            subject: '', 
-            date: '', 
-            body: '', 
-            size: 0,
-          ),
-        );
-        
-        if (message.id.isNotEmpty) {
-          message.isDeleted = true;
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          _debug('Message $messageId deleted successfully on server');
+          
+          // Remove from local list
+          _messages.removeWhere((msg) => msg.id == messageId);
           notifyListeners();
+          
+          return true;
         }
-        
-        _updateStatus('');
-        return true;
-      } else {
-        _updateStatus('');
-        return false;
       }
+      
+      _debug('ERROR: Delete failed with status ${response.statusCode}');
+      _debug('Response body: ${response.body}');
+      return false;
     } catch (e) {
       _debug('ERROR deleting message: $e');
-      _updateStatus('');
       return false;
     }
   }
 
-  // Send email via SMTP (unchanged)
+  // Send email via SMTP
   Future<bool> sendEmail({
     required String to,
     required String subject,
@@ -609,7 +532,7 @@ class Pop3MailService with ChangeNotifier {
         }
       });
 
-      // SMTP protocol implementation (same as before)
+      // SMTP protocol implementation
       final greeting = await smtpResponse.stream.first.timeout(const Duration(seconds: 60));
       if (!greeting.startsWith('220')) throw Exception('Invalid SMTP greeting');
 
@@ -725,17 +648,6 @@ $body\r
   void disconnect() {
     _debug('Disconnecting...');
     
-    if (_pop3Socket != null) {
-      try {
-        _pop3Socket!.write('QUIT\r\n');
-      } catch (e) {
-        _debug('Error sending QUIT: $e');
-      }
-    }
-    
-    _pop3Socket?.close();
-    _smtpSocket?.close();
-    
     _isConnected = false;
     _isSending = false;
     _username = null;
@@ -751,7 +663,6 @@ $body\r
   @override
   void dispose() {
     disconnect();
-    _responseController.close();
     super.dispose();
   }
 }

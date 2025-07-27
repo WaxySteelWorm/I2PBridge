@@ -1,360 +1,584 @@
-// lib/services/mail_service.dart
-// IMAP/SMTP client for I2P mail
+// lib/pages/mail_page.dart
+// I2P Mail client with POP3/SMTP
 
-import 'dart:async';
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:enough_mail/enough_mail.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
+import '../services/pop3_mail_service.dart';
+import 'compose_mail_page.dart';
+import 'read_mail_page.dart';
 
-class MailMessage {
-  final int id;
-  final String from;
-  final String to;
-  final String subject;
-  final String body;
-  final DateTime date;
-  final bool isRead;
-  final bool hasAttachments;
-
-  MailMessage({
-    required this.id,
-    required this.from,
-    required this.to,
-    required this.subject,
-    required this.body,
-    required this.date,
-    this.isRead = false,
-    this.hasAttachments = false,
-  });
-}
-
-class MailFolder {
-  final String name;
-  final String path;
-  final int messageCount;
-  final int unreadCount;
-  final IconData icon;
-
-  MailFolder({
-    required this.name,
-    required this.path,
-    required this.messageCount,
-    required this.unreadCount,
-    required this.icon,
-  });
-}
-
-class MailService with ChangeNotifier {
-  // Connection settings - using bridge server as proxy
-  static const String _imapHost = 'bridge.stormycloud.org';
-  static const int _imapPort = 7660; // You'll need to set up IMAP tunnel on this port
-  static const String _smtpHost = 'bridge.stormycloud.org';
-  static const int _smtpPort = 7659; // You'll need to set up SMTP tunnel on this port
-  
-  ImapClient? _imapClient;
-  SmtpClient? _smtpClient;
-  
-  bool _isConnected = false;
-  bool _isLoading = false;
-  String? _username;
-  String? _password;
-  
-  List<MailFolder> _folders = [];
-  List<MailMessage> _messages = [];
-  MailFolder? _currentFolder;
-  
-  bool get isConnected => _isConnected;
-  bool get isLoading => _isLoading;
-  String? get username => _username;
-  List<MailFolder> get folders => _folders;
-  List<MailMessage> get messages => _messages;
-  MailFolder? get currentFolder => _currentFolder;
-
-  // Connect to mail server
-  Future<bool> connect(String username, String password) async {
-    try {
-      _isLoading = true;
-      notifyListeners();
-      
-      // Store credentials in memory only (no local storage for security)
-      _username = username;
-      _password = password;
-      
-      // Initialize IMAP client
-      _imapClient = ImapClient(isLogEnabled: false);
-      
-      try {
-        // Connect to IMAP server through bridge
-        await _imapClient!.connectToServer(_imapHost, _imapPort, 
-          isSecure: false // Since we're going through the bridge
-        );
-        
-        // Authenticate
-        await _imapClient!.login(username, password);
-        
-        _isConnected = true;
-        
-        // Load folders
-        await _loadFolders();
-        
-        // Select INBOX by default
-        await selectFolder('INBOX');
-        
-        _isLoading = false;
-        notifyListeners();
-        return true;
-        
-      } catch (e) {
-        print('IMAP connection error: $e');
-        _isConnected = false;
-        _isLoading = false;
-        notifyListeners();
-        return false;
-      }
-      
-    } catch (e) {
-      print('Mail service error: $e');
-      _isLoading = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
-  // Load mail folders
-  Future<void> _loadFolders() async {
-    if (_imapClient == null || !_isConnected) return;
-    
-    try {
-      final mailboxes = await _imapClient!.listMailboxes();
-      
-      _folders = mailboxes.map((mailbox) {
-        IconData icon;
-        switch (mailbox.name.toLowerCase()) {
-          case 'inbox':
-            icon = Icons.inbox;
-            break;
-          case 'sent':
-            icon = Icons.send;
-            break;
-          case 'drafts':
-            icon = Icons.drafts;
-            break;
-          case 'trash':
-            icon = Icons.delete;
-            break;
-          case 'spam':
-            icon = Icons.report;
-            break;
-          default:
-            icon = Icons.folder;
-        }
-        
-        return MailFolder(
-          name: mailbox.name,
-          path: mailbox.path,
-          messageCount: mailbox.messagesExists,
-          unreadCount: mailbox.messagesUnread,
-          icon: icon,
-        );
-      }).toList();
-      
-      notifyListeners();
-    } catch (e) {
-      print('Error loading folders: $e');
-    }
-  }
-
-  // Select a folder and load messages
-  Future<void> selectFolder(String folderName) async {
-    if (_imapClient == null || !_isConnected) return;
-    
-    _isLoading = true;
-    notifyListeners();
-    
-    try {
-      // Select the mailbox
-      final mailbox = await _imapClient!.selectMailbox(folderName);
-      
-      _currentFolder = _folders.firstWhere((f) => f.name == folderName);
-      
-      // Fetch recent messages (last 50)
-      _messages.clear();
-      
-      if (mailbox.messagesExists > 0) {
-        final sequence = MessageSequence.fromRange(
-          max(1, mailbox.messagesExists - 49), 
-          mailbox.messagesExists
-        );
-        
-        final messages = await _imapClient!.fetchMessages(
-          sequence,
-          'ENVELOPE BODY.PEEK[]'
-        );
-        
-        // Convert to our format
-        _messages = messages.map((msg) {
-          final envelope = msg.envelope;
-          return MailMessage(
-            id: msg.sequenceId!,
-            from: envelope?.from?.first.toString() ?? 'Unknown',
-            to: envelope?.to?.first.toString() ?? '',
-            subject: envelope?.subject ?? '(No Subject)',
-            body: _extractBody(msg),
-            date: envelope?.date ?? DateTime.now(),
-            isRead: !msg.isSeen,
-            hasAttachments: msg.hasAttachments,
-          );
-        }).toList();
-        
-        // Sort by date, newest first
-        _messages.sort((a, b) => b.date.compareTo(a.date));
-      }
-      
-      _isLoading = false;
-      notifyListeners();
-      
-    } catch (e) {
-      print('Error selecting folder: $e');
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
-
-  // Extract plain text body from message
-  String _extractBody(MimeMessage message) {
-    try {
-      return message.decodeTextPlainPart() ?? 
-             message.decodeTextHtmlPart() ?? 
-             '(No content)';
-    } catch (e) {
-      return '(Error reading message)';
-    }
-  }
-
-  // Send an email
-  Future<bool> sendMail({
-    required String to,
-    required String subject,
-    required String body,
-  }) async {
-    if (_username == null || _password == null) return false;
-    
-    try {
-      // Initialize SMTP client if needed
-      _smtpClient ??= SmtpClient('I2P Bridge Mail');
-      
-      if (!_smtpClient!.isConnected) {
-        await _smtpClient!.connectToServer(_smtpHost, _smtpPort, 
-          isSecure: false
-        );
-        await _smtpClient!.authenticate(_username!, _password!);
-      }
-      
-      // Build message
-      final builder = MessageBuilder()
-        ..from = [MailAddress(_username!, _username!)]
-        ..to = [MailAddress(to, to)]
-        ..subject = subject
-        ..text = body;
-      
-      final message = builder.buildMimeMessage();
-      
-      // Send
-      await _smtpClient!.sendMessage(message);
-      
-      return true;
-      
-    } catch (e) {
-      print('Error sending mail: $e');
-      return false;
-    }
-  }
-
-  // Mark message as read
-  Future<void> markAsRead(int messageId) async {
-    if (_imapClient == null || !_isConnected) return;
-    
-    try {
-      await _imapClient!.store(
-        MessageSequence.fromId(messageId),
-        ['\\Seen'],
-        action: StoreAction.add,
-      );
-      
-      // Update local state
-      final index = _messages.indexWhere((m) => m.id == messageId);
-      if (index != -1) {
-        _messages[index] = MailMessage(
-          id: _messages[index].id,
-          from: _messages[index].from,
-          to: _messages[index].to,
-          subject: _messages[index].subject,
-          body: _messages[index].body,
-          date: _messages[index].date,
-          isRead: true,
-          hasAttachments: _messages[index].hasAttachments,
-        );
-        notifyListeners();
-      }
-    } catch (e) {
-      print('Error marking as read: $e');
-    }
-  }
-
-  // Delete message
-  Future<void> deleteMessage(int messageId) async {
-    if (_imapClient == null || !_isConnected) return;
-    
-    try {
-      // Mark as deleted
-      await _imapClient!.store(
-        MessageSequence.fromId(messageId),
-        ['\\Deleted'],
-        action: StoreAction.add,
-      );
-      
-      // Expunge to actually delete
-      await _imapClient!.expunge();
-      
-      // Remove from local list
-      _messages.removeWhere((m) => m.id == messageId);
-      notifyListeners();
-      
-    } catch (e) {
-      print('Error deleting message: $e');
-    }
-  }
-
-  // Refresh current folder
-  Future<void> refresh() async {
-    if (_currentFolder != null) {
-      await selectFolder(_currentFolder!.name);
-    }
-  }
-
-  // Disconnect
-  void disconnect() async {
-    try {
-      await _imapClient?.logout();
-      await _imapClient?.disconnect();
-      await _smtpClient?.disconnect();
-    } catch (e) {
-      print('Error disconnecting: $e');
-    }
-    
-    _isConnected = false;
-    _username = null;
-    _password = null;
-    _messages.clear();
-    _folders.clear();
-    _currentFolder = null;
-    notifyListeners();
-  }
+class MailPage extends StatefulWidget {
+  const MailPage({super.key});
 
   @override
+  State<MailPage> createState() => _MailPageState();
+}
+
+class _MailPageState extends State<MailPage> {
+  final TextEditingController _usernameController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
+  late Pop3MailService _mailService;
+  
+  @override
+  void initState() {
+    super.initState();
+    _mailService = Pop3MailService();
+  }
+  
+  @override
   void dispose() {
-    disconnect();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _mailService.dispose();
     super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider.value(
+      value: _mailService,
+      child: Consumer<Pop3MailService>(
+        builder: (context, mailService, child) {
+          if (!mailService.isConnected) {
+            return _buildLoginView(context, mailService);
+          }
+          return _buildInboxView(context, mailService);
+        },
+      ),
+    );
+  }
+  
+  Widget _buildLoginView(BuildContext context, Pop3MailService mailService) {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Icon(Icons.mail_outline, size: 80, color: Colors.blueAccent),
+          const SizedBox(height: 24),
+          // Privacy info
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.green.withOpacity(0.3)),
+            ),
+            child: Column(
+              children: const [
+                Icon(Icons.lock, color: Colors.green, size: 24),
+                SizedBox(height: 8),
+                Text(
+                  'Secure I2P Mail',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green,
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  '• Encrypted connection to mail server',
+                  style: TextStyle(fontSize: 13),
+                ),
+                Text(
+                  '• Messages parsed server-side for security',
+                  style: TextStyle(fontSize: 13),
+                ),
+                Text(
+                  '• No local storage on device',
+                  style: TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          TextField(
+            controller: _usernameController,
+            decoration: const InputDecoration(
+              labelText: 'Username',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.person_outline),
+              hintText: 'username',
+              helperText: 'Just your username, not @mail.i2p',
+            ),
+            keyboardType: TextInputType.emailAddress,
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _passwordController,
+            decoration: const InputDecoration(
+              labelText: 'Password',
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.lock_outline),
+            ),
+            obscureText: true,
+          ),
+          const SizedBox(height: 24),
+          ElevatedButton.icon(
+            onPressed: mailService.isLoading ? null : () async {
+              final username = _usernameController.text.trim();
+              final password = _passwordController.text;
+              
+              if (username.isEmpty || password.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter username and password'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+                return;
+              }
+              
+              final success = await mailService.connect(username, password);
+              if (!success && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(mailService.lastError.isNotEmpty 
+                      ? mailService.lastError 
+                      : 'Login failed. Check your credentials.'),
+                    backgroundColor: Colors.red,
+                    duration: const Duration(seconds: 5),
+                  ),
+                );
+              }
+            },
+            icon: mailService.isLoading 
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                )
+              : const Icon(Icons.login),
+            label: Text(mailService.isLoading ? 'Connecting...' : 'Login'),
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 16),
+            ),
+          ),
+          _buildStatusMessage(mailService),
+          _buildDebugSection(mailService),
+          const SizedBox(height: 16),
+          const Text(
+            'Need an account? Create one at:\nhttp://127.0.0.1:7657/susimail/',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 12, color: Colors.grey),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatusMessage(Pop3MailService mailService) {
+    if (mailService.statusMessage.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Column(
+      children: [
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.blue.withOpacity(0.1),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.blue.withOpacity(0.3)),
+          ),
+          child: Row(
+            children: [
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.blue,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  mailService.statusMessage,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Colors.blue,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDebugSection(Pop3MailService mailService) {
+    if (!mailService.debugMode || mailService.debugLog.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Column(
+      children: [
+        const SizedBox(height: 16),
+        TextButton.icon(
+          onPressed: () {
+            showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              builder: (context) => Container(
+                height: MediaQuery.of(context).size.height * 0.7,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Debug Log',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                    const Divider(),
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: mailService.debugLog.length,
+                        itemBuilder: (context, index) {
+                          return Text(
+                            mailService.debugLog[index],
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+          icon: const Icon(Icons.bug_report),
+          label: Text('View Debug Log (${mailService.debugLog.length})'),
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildInboxView(BuildContext context, Pop3MailService mailService) {
+    return Column(
+      children: [
+        // Header
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardColor,
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.inbox, color: Colors.blueAccent),
+              const SizedBox(width: 8),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Inbox',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  Text(
+                    '${mailService.username}@mail.i2p',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+              const Spacer(),
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: mailService.isLoading ? null : () => mailService.refresh(),
+              ),
+              IconButton(
+                icon: const Icon(Icons.logout),
+                onPressed: () => mailService.disconnect(),
+              ),
+            ],
+          ),
+        ),
+        
+        // Message list
+        Expanded(
+          child: Column(
+            children: [
+              _buildLoadingIndicator(mailService),
+              Expanded(
+                child: _buildMessageList(mailService),
+              ),
+            ],
+          ),
+        ),
+        
+        // Compose button
+        Padding(
+          padding: const EdgeInsets.all(16),
+          child: ElevatedButton.icon(
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ComposeMailPage(
+                    mailService: mailService,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.create),
+            label: const Text('Compose'),
+            style: ElevatedButton.styleFrom(
+              minimumSize: const Size(double.infinity, 48),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildLoadingIndicator(Pop3MailService mailService) {
+    if (mailService.statusMessage.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      margin: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.blue.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.blue.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.blue,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              mailService.statusMessage,
+              style: const TextStyle(
+                fontSize: 13,
+                color: Colors.blue,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMessageList(Pop3MailService mailService) {
+    if (mailService.isLoading && mailService.messages.isEmpty) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+    
+    // Show error message if there's a timeout or other error
+    if (mailService.messages.isEmpty && mailService.lastError.isNotEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.error_outline,
+              size: 64,
+              color: Colors.orange.shade400,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Loading Error',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 32),
+              child: Text(
+                mailService.lastError,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.grey.shade600,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () => mailService.refresh(),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    if (mailService.messages.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.inbox,
+              size: 64,
+              color: Colors.grey.shade400,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No messages',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey.shade600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    
+    return RefreshIndicator(
+      onRefresh: () => mailService.refresh(),
+      child: ListView.builder(
+        itemCount: mailService.messages.length,
+        itemBuilder: (context, index) {
+          final message = mailService.messages[index];
+          return Card(
+            margin: const EdgeInsets.symmetric(
+              horizontal: 8,
+              vertical: 4,
+            ),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: Colors.blueAccent.withOpacity(0.2),
+                child: Text(
+                  message.from.isNotEmpty 
+                    ? message.from[0].toUpperCase()
+                    : '?',
+                  style: const TextStyle(
+                    color: Colors.blueAccent,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              title: Text(
+                message.from,
+                style: TextStyle(
+                  fontWeight: message.isRead 
+                    ? FontWeight.normal 
+                    : FontWeight.bold,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              subtitle: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    message.subject,
+                    style: TextStyle(
+                      fontWeight: message.isRead 
+                        ? FontWeight.normal 
+                        : FontWeight.w500,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  Text(
+                    message.date,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                ],
+              ),
+              trailing: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    message.isRead 
+                      ? Icons.mail_outline 
+                      : Icons.mark_email_unread,
+                    size: 20,
+                    color: message.isRead 
+                      ? Colors.grey 
+                      : Colors.blueAccent,
+                  ),
+                  if (message.attachments.isNotEmpty)
+                    const Icon(
+                      Icons.attach_file,
+                      size: 14,
+                      color: Colors.grey,
+                    ),
+                ],
+              ),
+              onTap: () async {
+                // Load full message
+                final fullMessage = await mailService.getMessage(message.id);
+                if (fullMessage != null && mounted) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => ReadMailPage(
+                        message: fullMessage,
+                        mailService: mailService,
+                      ),
+                    ),
+                  );
+                  
+                  // Mark as read in list
+                  setState(() {
+                    message.isRead = true;
+                  });
+                }
+              },
+            ),
+          );
+        },
+      ),
+    );
   }
 }

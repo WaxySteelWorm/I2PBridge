@@ -1,5 +1,5 @@
 // lib/pages/read_mail_page.dart
-// Read mail page for I2P Bridge app with HTML support and attachments
+// Read mail page with improved styling and UX
 
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
@@ -22,6 +22,7 @@ class ReadMailPage extends StatefulWidget {
 
 class _ReadMailPageState extends State<ReadMailPage> {
   bool _showHtml = false;
+  bool _isDeleting = false;
 
   @override
   Widget build(BuildContext context) {
@@ -64,8 +65,17 @@ class _ReadMailPageState extends State<ReadMailPage> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.delete),
-            onPressed: () => _deleteMessage(context),
+            icon: _isDeleting 
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
+                )
+              : const Icon(Icons.delete),
+            onPressed: _isDeleting ? null : () => _deleteMessage(context),
           ),
         ],
       ),
@@ -96,8 +106,8 @@ class _ReadMailPageState extends State<ReadMailPage> {
                       CircleAvatar(
                         backgroundColor: Colors.blueAccent.withOpacity(0.2),
                         child: Text(
-                          message.from.isNotEmpty 
-                            ? message.from[0].toUpperCase()
+                          _getDisplayName(message.from).isNotEmpty 
+                            ? _getDisplayName(message.from)[0].toUpperCase()
                             : '?',
                           style: const TextStyle(
                             color: Colors.blueAccent,
@@ -118,12 +128,20 @@ class _ReadMailPageState extends State<ReadMailPage> {
                               ),
                             ),
                             Text(
-                              message.from,
+                              _getDisplayName(message.from),
                               style: const TextStyle(
                                 fontSize: 16,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
+                            if (_getEmailAddress(message.from) != _getDisplayName(message.from))
+                              Text(
+                                _getEmailAddress(message.from),
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.grey.shade600,
+                                ),
+                              ),
                           ],
                         ),
                       ),
@@ -249,14 +267,14 @@ class _ReadMailPageState extends State<ReadMailPage> {
               const SizedBox(height: 12),
             ],
             
-            // Attachments section
+            // Attachments section with improved styling
             if (message.attachments.isNotEmpty) ...[
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: Colors.blue.withOpacity(0.1),
+                  color: Theme.of(context).cardColor,
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: Colors.blue.withOpacity(0.3)),
+                  border: Border.all(color: Colors.blue.withOpacity(0.2)),
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -287,16 +305,23 @@ class _ReadMailPageState extends State<ReadMailPage> {
                         margin: const EdgeInsets.only(bottom: 8),
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: Colors.transparent,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(color: Colors.grey.withOpacity(0.3)),
                         ),
                         child: Row(
                           children: [
-                            Icon(
-                              _getAttachmentIcon(attachment.contentType),
-                              size: 24,
-                              color: Colors.grey.shade700,
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Icon(
+                                _getAttachmentIcon(attachment.contentType),
+                                size: 20,
+                                color: Colors.blue.shade700,
+                              ),
                             ),
                             const SizedBox(width: 12),
                             Expanded(
@@ -323,11 +348,21 @@ class _ReadMailPageState extends State<ReadMailPage> {
                                 ],
                               ),
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.download),
-                              onPressed: () => _downloadAttachment(attachment, index),
-                              tooltip: 'Download attachment',
-                              color: Colors.blue.shade700,
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade700,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.download, color: Colors.white),
+                                onPressed: () => _downloadAttachment(attachment, index),
+                                tooltip: 'Download attachment',
+                                constraints: const BoxConstraints(
+                                  minWidth: 36,
+                                  minHeight: 36,
+                                ),
+                                padding: const EdgeInsets.all(6),
+                              ),
                             ),
                           ],
                         ),
@@ -378,6 +413,34 @@ class _ReadMailPageState extends State<ReadMailPage> {
       ),
     );
   }
+
+  // Extract display name from email address
+  String _getDisplayName(String fromAddress) {
+    // Handle "Name <email>" format
+    final match = RegExp(r'^(.+?)\s*<.+>$').firstMatch(fromAddress);
+    if (match != null) {
+      return match.group(1)?.replaceAll('"', '').trim() ?? fromAddress;
+    }
+    
+    // Handle plain email address
+    if (fromAddress.contains('@')) {
+      return fromAddress.split('@')[0];
+    }
+    
+    return fromAddress;
+  }
+
+  // Extract email address from from field
+  String _getEmailAddress(String fromAddress) {
+    // Handle "Name <email>" format
+    final match = RegExp(r'<([^>]+)>').firstMatch(fromAddress);
+    if (match != null) {
+      return match.group(1) ?? fromAddress;
+    }
+    
+    // Return as-is if it's already just an email
+    return fromAddress;
+  }
   
   Future<void> _deleteMessage(BuildContext context) async {
     // Show confirmation dialog
@@ -403,23 +466,62 @@ class _ReadMailPageState extends State<ReadMailPage> {
     );
     
     if (confirmed == true) {
+      setState(() {
+        _isDeleting = true;
+      });
+
+      // Close the message view immediately for better UX
+      Navigator.pop(context);
+      
+      // Show a snackbar to indicate deletion is in progress
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Row(
+            children: [
+              SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                  strokeWidth: 2,
+                ),
+              ),
+              SizedBox(width: 12),
+              Text('Deleting message...'),
+            ],
+          ),
+          duration: Duration(seconds: 3),
+        ),
+      );
+
+      // Delete in background
       final success = await widget.mailService.deleteMessage(widget.message.id);
       
-      if (success && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Message deleted'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.pop(context);
-      } else if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to delete message'),
-            backgroundColor: Colors.red,
-          ),
-        );
+      if (mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Message deleted'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to delete message'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _isDeleting = false;
+        });
       }
     }
   }
@@ -446,11 +548,8 @@ class _ReadMailPageState extends State<ReadMailPage> {
         ),
       );
       
-      // Note: In a real implementation, you would make an HTTP request to your server's
-      // attachment download endpoint and handle the file download/saving
-      // For now, we'll just show a placeholder message
-      
-      await Future.delayed(const Duration(seconds: 2)); // Simulate download
+      // TODO: Implement actual download from server
+      await Future.delayed(const Duration(seconds: 2));
       
       if (mounted) {
         ScaffoldMessenger.of(context).hideCurrentSnackBar();
@@ -461,7 +560,6 @@ class _ReadMailPageState extends State<ReadMailPage> {
             action: SnackBarAction(
               label: 'Open',
               onPressed: () {
-                // TODO: Implement file opening
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('File opening not yet implemented'),
@@ -561,20 +659,6 @@ class _ReadMailPageState extends State<ReadMailPage> {
                 fontFamily: 'monospace',
                 fontSize: FontSize(13),
               ),
-              "table": Style(
-                border: Border.all(color: Colors.grey.shade300),
-                margin: Margins.symmetric(vertical: 8),
-              ),
-              "td": Style(
-                border: Border.all(color: Colors.grey.shade300),
-                padding: HtmlPaddings.all(8),
-              ),
-              "th": Style(
-                border: Border.all(color: Colors.grey.shade300),
-                padding: HtmlPaddings.all(8),
-                backgroundColor: Colors.grey.shade100,
-                fontWeight: FontWeight.bold,
-              ),
             },
             onLinkTap: (url, attributes, element) {
               if (url != null) {
@@ -616,18 +700,6 @@ class _ReadMailPageState extends State<ReadMailPage> {
                       TextButton(
                         onPressed: () => Navigator.pop(context),
                         child: const Text('Close'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          // TODO: Copy to clipboard
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Link copying not yet implemented'),
-                            ),
-                          );
-                        },
-                        child: const Text('Copy'),
                       ),
                     ],
                   ),
