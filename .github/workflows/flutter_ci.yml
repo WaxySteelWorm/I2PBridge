@@ -16,7 +16,7 @@ jobs:
       - run: flutter build apk --debug
 
   build-ios:
-    runs-on: macos-latest
+    runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
