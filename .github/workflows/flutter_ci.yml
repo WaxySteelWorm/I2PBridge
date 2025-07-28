@@ -19,9 +19,5 @@ jobs:
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.32.8'
       - run: flutter pub get
       - run: flutter build ios --no-codesign
-
