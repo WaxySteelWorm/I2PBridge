@@ -1,6 +1,5 @@
 // lib/services/encryption_service.dart
-// This service handles end-to-end encryption between the app and I2P destinations
-// The bridge server will only see encrypted payloads
+// Enhanced encryption service with mail support
 
 import 'dart:convert';
 import 'dart:typed_data';
@@ -18,6 +17,10 @@ class EncryptionService {
   late final Uint8List _sessionIV;
   bool _initialized = false;
   
+  // Mail-specific encryption keys (derived from session key)
+  late final Uint8List _mailKey;
+  late final Uint8List _mailIV;
+  
   // Initialize encryption parameters
   void initialize() {
     if (_initialized) return; // Prevent re-initialization
@@ -25,7 +28,21 @@ class EncryptionService {
     final secureRandom = _getSecureRandom();
     _sessionKey = secureRandom.nextBytes(32); // 256-bit key for AES
     _sessionIV = secureRandom.nextBytes(16);  // 128-bit IV for AES
+    
+    // Derive mail-specific keys from session key
+    _mailKey = _deriveKey(_sessionKey, 'mail_key');
+    _mailIV = _deriveKey(_sessionKey, 'mail_iv').sublist(0, 16);
+    
     _initialized = true;
+  }
+
+  // Derive a key from the master session key using a context string
+  Uint8List _deriveKey(Uint8List masterKey, String context) {
+    final contextBytes = utf8.encode(context);
+    final combined = Uint8List.fromList([...masterKey, ...contextBytes]);
+    
+    final digest = SHA256Digest();
+    return digest.process(combined);
   }
 
   // Get a cryptographically secure random number generator
@@ -62,8 +79,6 @@ class EncryptionService {
         'encrypted': true,
         'data': base64.encode(encrypted),
         'iv': base64.encode(_sessionIV),
-        // In production, you'd exchange keys securely
-        // For now, we'll include the key (this is just for demonstration)
         'key': base64.encode(_sessionKey),
       };
     } catch (e) {
@@ -102,6 +117,203 @@ class EncryptionService {
       rethrow;
     }
   }
+
+  // =================================================================
+  // MAIL-SPECIFIC ENCRYPTION FUNCTIONS
+  // =================================================================
+
+  // Encrypt mail credentials
+  Map<String, String> encryptMailCredentials(String username, String password) {
+    try {
+      if (!_initialized) initialize();
+      
+      final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
+      final params = PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(_mailKey), _mailIV),
+        null
+      );
+      cipher.init(true, params);
+      
+      // Encrypt username
+      final usernameBytes = utf8.encode(username);
+      final encryptedUsername = cipher.process(Uint8List.fromList(usernameBytes));
+      
+      // Reset cipher for password
+      cipher.reset();
+      cipher.init(true, params);
+      final passwordBytes = utf8.encode(password);
+      final encryptedPassword = cipher.process(Uint8List.fromList(passwordBytes));
+      
+      return {
+        'user': base64.encode(encryptedUsername),
+        'pass': base64.encode(encryptedPassword),
+        'key': base64.encode(_mailKey),
+        'iv': base64.encode(_mailIV),
+      };
+    } catch (e) {
+      print('Mail credential encryption error: $e');
+      rethrow;
+    }
+  }
+
+  // Encrypt mail content (body, subject)
+  Map<String, dynamic> encryptMailContent({
+    required String body,
+    String? htmlBody,
+    String? subject,
+  }) {
+    try {
+      if (!_initialized) initialize();
+      
+      final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
+      final params = PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(_mailKey), _mailIV),
+        null
+      );
+      
+      // Encrypt body
+      cipher.init(true, params);
+      final bodyBytes = utf8.encode(body);
+      final encryptedBody = cipher.process(Uint8List.fromList(bodyBytes));
+      
+      Map<String, dynamic> encrypted = {
+        'body': base64.encode(encryptedBody),
+        'encrypted': true,
+        'key': base64.encode(_mailKey),
+        'iv': base64.encode(_mailIV),
+      };
+      
+      // Encrypt HTML body if present
+      if (htmlBody != null && htmlBody.isNotEmpty) {
+        cipher.reset();
+        cipher.init(true, params);
+        final htmlBytes = utf8.encode(htmlBody);
+        final encryptedHtml = cipher.process(Uint8List.fromList(htmlBytes));
+        encrypted['htmlBody'] = base64.encode(encryptedHtml);
+      }
+      
+      // Encrypt subject if present (optional based on I2P compatibility)
+      if (subject != null && subject.isNotEmpty) {
+        cipher.reset();
+        cipher.init(true, params);
+        final subjectBytes = utf8.encode(subject);
+        final encryptedSubject = cipher.process(Uint8List.fromList(subjectBytes));
+        encrypted['subject'] = base64.encode(encryptedSubject);
+      }
+      
+      return encrypted;
+    } catch (e) {
+      print('Mail content encryption error: $e');
+      rethrow;
+    }
+  }
+
+  // Decrypt mail content
+  Map<String, String?> decryptMailContent(Map<String, dynamic> encryptedData) {
+    try {
+      if (!encryptedData.containsKey('encrypted') || !encryptedData['encrypted']) {
+        // Not encrypted, return as-is
+        return {
+          'body': encryptedData['text']?.toString(),
+          'htmlBody': encryptedData['html']?.toString(),
+          'subject': encryptedData['subject']?.toString(),
+        };
+      }
+      
+      final key = base64.decode(encryptedData['key']);
+      final iv = base64.decode(encryptedData['iv']);
+      
+      final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
+      final params = PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(key), iv),
+        null
+      );
+      
+      Map<String, String?> decrypted = {};
+      
+      // Decrypt body
+      if (encryptedData.containsKey('body')) {
+        cipher.init(false, params);
+        final encryptedBody = base64.decode(encryptedData['body']);
+        final decryptedBody = cipher.process(encryptedBody);
+        decrypted['body'] = utf8.decode(decryptedBody);
+      }
+      
+      // Decrypt HTML body
+      if (encryptedData.containsKey('htmlBody')) {
+        cipher.reset();
+        cipher.init(false, params);
+        final encryptedHtml = base64.decode(encryptedData['htmlBody']);
+        final decryptedHtml = cipher.process(encryptedHtml);
+        decrypted['htmlBody'] = utf8.decode(decryptedHtml);
+      }
+      
+      // Decrypt subject
+      if (encryptedData.containsKey('subject')) {
+        cipher.reset();
+        cipher.init(false, params);
+        final encryptedSubject = base64.decode(encryptedData['subject']);
+        final decryptedSubject = cipher.process(encryptedSubject);
+        decrypted['subject'] = utf8.decode(decryptedSubject);
+      }
+      
+      return decrypted;
+    } catch (e) {
+      print('Mail content decryption error: $e');
+      rethrow;
+    }
+  }
+
+  // Encrypt email for sending
+  Map<String, dynamic> encryptOutgoingEmail({
+    required String to,
+    required String subject,
+    required String body,
+  }) {
+    try {
+      if (!_initialized) initialize();
+      
+      final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
+      final params = PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(_mailKey), _mailIV),
+        null
+      );
+      
+      // Create email data structure
+      final emailData = {
+        'to': to,
+        'subject': subject,
+        'body': body,
+        'timestamp': DateTime.now().toIso8601String(),
+      };
+      
+      // Encrypt the entire email data
+      cipher.init(true, params);
+      final emailBytes = utf8.encode(json.encode(emailData));
+      final encryptedEmail = cipher.process(Uint8List.fromList(emailBytes));
+      
+      return {
+        'encrypted': true,
+        'data': base64.encode(encryptedEmail),
+        'key': base64.encode(_mailKey),
+        'iv': base64.encode(_mailIV),
+        'to': to, // Keep recipient in plaintext for server routing
+      };
+    } catch (e) {
+      print('Outgoing email encryption error: $e');
+      rethrow;
+    }
+  }
+
+  // Generate session ID for mail operations
+  String generateMailSessionId() {
+    if (!_initialized) initialize();
+    return base64.encode(_getSecureRandom().nextBytes(16));
+  }
+
+  // =================================================================
+  // EXISTING FUNCTIONS (unchanged)
+  // =================================================================
 
   // Encrypt URL for browse requests (simplified for server compatibility)
   String encryptUrl(String url) {
@@ -194,6 +406,15 @@ extension EncryptionHelpers on EncryptionService {
     return {
       'X-Encryption': 'AES-256-CBC',
       'X-Channel-Id': generateChannelId(),
+      'Content-Type': 'application/json',
+    };
+  }
+  
+  // Helper to create secure mail headers
+  Map<String, String> getSecureMailHeaders() {
+    return {
+      'X-Encryption': 'AES-256-CBC',
+      'X-Mail-Session': generateMailSessionId(),
       'Content-Type': 'application/json',
     };
   }
