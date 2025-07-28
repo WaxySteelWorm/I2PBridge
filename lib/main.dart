@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'services/irc_service.dart';
+import 'services/pop3_mail_service.dart';  // Add this import
 import 'pages/browser_page.dart';
 import 'pages/upload_page.dart';
 import 'pages/irc_page.dart';
@@ -15,8 +16,11 @@ import 'assets/stormycloud_logo.dart';
 
 void main() {
   runApp(
-    ChangeNotifierProvider(
-      create: (context) => IrcService(),
+    MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
+      providers: [
+        ChangeNotifierProvider(create: (context) => IrcService()),
+        ChangeNotifierProvider(create: (context) => Pop3MailService()),  // Add this line
+      ],
       child: const I2PBridgeApp(),
     ),
   );
