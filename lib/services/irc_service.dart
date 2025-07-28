@@ -1,15 +1,15 @@
-// lib/services/irc_service.dart
-// IRC service with encrypted WebSocket transport
-
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/export.dart';
+import 'package:crypto/crypto.dart';
 
 class ParsedMessage {
   final String sender;
@@ -47,6 +47,10 @@ class IrcService with ChangeNotifier {
     Colors.pink.shade300, Colors.indigo.shade300
   ];
 
+  // SSL Pinning configuration
+  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
+
   bool get isConnected => _isConnected;
   Map<String, List<ParsedMessage>> get buffers => _buffers;
   String get currentBuffer => _currentBuffer;
@@ -73,6 +77,32 @@ class IrcService with ChangeNotifier {
     _nickServPassword = prefs.getString('irc_password') ?? '';
     _hideJoinQuit = prefs.getBool('irc_hide_join_quit') ?? false;
     notifyListeners();
+  }
+
+  HttpClient _createPinnedHttpClient() {
+    final httpClient = HttpClient();
+    httpClient.userAgent = appUserAgent;
+    
+    httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (host != 'bridge.stormycloud.org') {
+        return false; // Only pin our specific domain
+      }
+      
+      try {
+        // Get the public key from the certificate
+        final publicKeyBytes = cert.der;
+        final publicKeyHash = sha256.convert(publicKeyBytes);
+        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        
+        // Compare with expected hash
+        return publicKeyHashBase64 == expectedPublicKeyHash;
+      } catch (e) {
+        print('Certificate validation error: $e');
+        return false;
+      }
+    };
+    
+    return httpClient;
   }
 
   // Encryption methods
@@ -128,8 +158,10 @@ class IrcService with ChangeNotifier {
     _lastChannel = initialChannel; // Store the channel to join
     
     _loadSettings().then((_) {
-      final wsUrl = Uri.parse('ws://bridge.stormycloud.org:3000');
-      _channel = WebSocketChannel.connect(wsUrl);
+      // Create pinned HTTP client for WebSocket
+      final httpClient = _createPinnedHttpClient();
+      final wsUrl = Uri.parse('wss://bridge.stormycloud.org');
+      _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
 
       _isConnected = true;
       _buffers.clear();

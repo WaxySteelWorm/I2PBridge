@@ -3,10 +3,12 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -104,6 +106,11 @@ class Pop3MailService with ChangeNotifier {
 
   // Server configuration
   static const String _serverBaseUrl = 'https://bridge.stormycloud.org';
+  
+  // SSL Pinning configuration
+  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
+  late http.Client _httpClient;
 
   bool get isConnected => _isConnected;
   bool get isLoading => _isLoading;
@@ -116,6 +123,33 @@ class Pop3MailService with ChangeNotifier {
 
   Pop3MailService() {
     _initializeEncryption();
+    _httpClient = _createPinnedHttpClient();
+  }
+
+  http.Client _createPinnedHttpClient() {
+    final httpClient = HttpClient();
+    httpClient.userAgent = appUserAgent;
+    
+    httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (host != 'bridge.stormycloud.org') {
+        return false; // Only pin our specific domain
+      }
+      
+      try {
+        // Get the public key from the certificate
+        final publicKeyBytes = cert.der;
+        final publicKeyHash = sha256.convert(publicKeyBytes);
+        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        
+        // Compare with expected hash
+        return publicKeyHashBase64 == expectedPublicKeyHash;
+      } catch (e) {
+        print('Certificate validation error: $e');
+        return false;
+      }
+    };
+    
+    return IOClient(httpClient);
   }
 
   void _initializeEncryption() {
@@ -212,11 +246,12 @@ class Pop3MailService with ChangeNotifier {
 
       _encryptedCredentials = _encryptCredentials(username, password);
 
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -269,11 +304,12 @@ class Pop3MailService with ChangeNotifier {
     notifyListeners();
 
     try {
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -369,11 +405,12 @@ Future<void> _prefetchRecentMessages() async {
     if (!_isConnected || _encryptedCredentials == null) return null;
 
     try {
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -452,11 +489,12 @@ Future<void> _prefetchRecentMessages() async {
     _updateStatus('Loading message...');
 
     try {
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -514,11 +552,12 @@ Future<void> _prefetchRecentMessages() async {
     }
 
     try {
-      final response = await http.delete(
+      final response = await _httpClient.delete(
         Uri.parse('$_serverBaseUrl/api/v1/mail/$messageId'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -571,11 +610,12 @@ Future<void> _prefetchRecentMessages() async {
         'iv': base64.encode(emailIV),
       };
 
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/send'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -653,6 +693,7 @@ Future<void> _prefetchRecentMessages() async {
 
   @override
   void dispose() {
+    _httpClient.close();
     disconnect();
     super.dispose();
   }

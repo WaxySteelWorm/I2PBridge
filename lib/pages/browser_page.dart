@@ -2,11 +2,14 @@
 // Redesigned browser with cleaner privacy UI
 
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:flutter_widget_from_html/flutter_widget_from_html.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:crypto/crypto.dart';
 import '../data/popular_sites.dart';
 import '../services/encryption_service.dart';
 
@@ -35,6 +38,11 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
   late AnimationController _lockAnimationController;
   late Animation<double> _lockAnimation;
   
+  // SSL Pinning configuration
+  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
+  late http.Client _httpClient;
+  
   bool get _canGoBack {
     return _historyIndex > 0 || (_historyIndex == 0 && _pageContent != null);
   }
@@ -45,6 +53,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
   void initState() {
     super.initState();
     _encryption.initialize(); // Safe to call multiple times
+    _httpClient = _createPinnedHttpClient();
     
     // Initialize animation
     _lockAnimationController = AnimationController(
@@ -68,9 +77,35 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
     }
   }
 
+  http.Client _createPinnedHttpClient() {
+    final httpClient = HttpClient();
+    
+    httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (host != 'bridge.stormycloud.org') {
+        return false; // Only pin our specific domain
+      }
+      
+      try {
+        // Get the public key from the certificate
+        final publicKeyBytes = cert.der;
+        final publicKeyHash = sha256.convert(publicKeyBytes);
+        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        
+        // Compare with expected hash
+        return publicKeyHashBase64 == expectedPublicKeyHash;
+      } catch (e) {
+        print('Certificate validation error: $e');
+        return false;
+      }
+    };
+    
+    return IOClient(httpClient);
+  }
+
   @override
   void dispose() {
     _lockAnimationController.dispose();
+    _httpClient.close();
     super.dispose();
   }
 
@@ -186,12 +221,13 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
         final sessionToken = _encryption.generateChannelId();
         final encryptedUrl = _encryption.encryptUrl(cleanUrl);
         
-        final response = await http.post(
+        final response = await _httpClient.post(
           Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             'X-Session-Token': sessionToken,
             'X-Privacy-Mode': 'enabled',
+            'User-Agent': appUserAgent,
             if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           },
           body: 'url=$encryptedUrl&encrypted=true',
@@ -213,10 +249,12 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
       } else {
         // Standard unencrypted mode
         final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=$cleanUrl');
-        final headers = <String, String>{};
+        final headers = <String, String>{
+          'User-Agent': appUserAgent,
+        };
         if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
         
-        final response = await http.get(browseUrl, headers: headers).timeout(const Duration(seconds: 30));
+        final response = await _httpClient.get(browseUrl, headers: headers).timeout(const Duration(seconds: 30));
         
         if (response.statusCode == 200) {
           final newContent = response.body;
@@ -371,8 +409,11 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                                     'Content-Type': 'application/x-www-form-urlencoded',
                                     'X-Session-Token': _encryption.generateChannelId(),
                                     'X-Privacy-Mode': 'enabled',
+                                    'User-Agent': appUserAgent,
                                   }
-                                : null,
+                                : {
+                                    'User-Agent': appUserAgent,
+                                  },
                               placeholder: (context, url) => const CircularProgressIndicator(), 
                               errorWidget: (context, url, error) => const Text('[Image failed to load]'),
                             )
@@ -401,10 +442,12 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                                       proxiedUrl, 
                                       colorFilter: ColorFilter.mode(svgColor, BlendMode.srcIn), 
                                       placeholderBuilder: (context) => const CircularProgressIndicator(), 
+                                      headers: {'User-Agent': appUserAgent},
                                     ); 
                                   } else { 
                                     return CachedNetworkImage( 
                                       imageUrl: proxiedUrl, 
+                                      httpHeaders: {'User-Agent': appUserAgent},
                                       placeholder: (context, url) => const CircularProgressIndicator(), 
                                       errorWidget: (context, url, error) => const Text('[Image failed to load]'), 
                                     ); 
