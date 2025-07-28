@@ -1,5 +1,5 @@
 // lib/pages/compose_mail_page.dart
-// Compose mail page with end-to-end encryption
+// Production compose mail page with end-to-end encryption
 
 import 'package:flutter/material.dart';
 import '../services/pop3_mail_service.dart';
@@ -118,7 +118,7 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
                           ),
                         ),
                         Text(
-                          'Your message will be encrypted before leaving your device',
+                          'Your message will be encrypted before sending',
                           style: TextStyle(
                             fontSize: 12,
                             color: Colors.green.shade600,
@@ -146,6 +146,7 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
               readOnly: isReply,
             ),
             const SizedBox(height: 12),
+            
             TextField(
               controller: _subjectController,
               decoration: InputDecoration(
@@ -158,6 +159,7 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
               ),
             ),
             const SizedBox(height: 12),
+            
             Expanded(
               child: TextField(
                 controller: _bodyController,
@@ -177,40 +179,25 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
             ),
             const SizedBox(height: 12),
             
-            // Enhanced privacy notice with technical details
+            // Privacy notice
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: Colors.blue.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: Colors.blue.withOpacity(0.3)),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Row(
-                    children: [
-                      Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
-                      const SizedBox(width: 8),
-                      Text(
-                        'Encryption Details',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.blue.shade700,
-                        ),
+                  Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Your message will be sent securely through the I2P network',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.blue.shade700,
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '• AES-256-CBC encryption with random keys\n'
-                    '• Server cannot decrypt your message content\n'
-                    '• Recipient credentials are also encrypted\n'
-                    '• Sent securely through I2P network',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.blue.shade700,
                     ),
                   ),
                 ],
@@ -275,7 +262,7 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
               children: [
                 Icon(Icons.check_circle, color: Colors.white),
                 SizedBox(width: 8),
-                Text('Encrypted message sent successfully!'),
+                Text('Message sent successfully!'),
               ],
             ),
             backgroundColor: Colors.green,
@@ -285,7 +272,7 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Failed to send encrypted message'),
+            content: Text('Failed to send message'),
             backgroundColor: Colors.red,
           ),
         );
@@ -293,8 +280,8 @@ class _ComposeMailPageState extends State<ComposeMailPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Encryption error: ${e.toString()}'),
+          const SnackBar(
+            content: Text('Failed to send message'),
             backgroundColor: Colors.red,
           ),
         );

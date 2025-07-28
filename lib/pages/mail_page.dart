@@ -1,9 +1,8 @@
 // lib/pages/mail_page.dart
-// I2P Mail client with end-to-end encryption
+// Production I2P Mail client with end-to-end encryption
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:intl/intl.dart';
 import '../services/pop3_mail_service.dart';
 import 'compose_mail_page.dart';
 import 'read_mail_page.dart';
@@ -58,7 +57,8 @@ class _MailPageState extends State<MailPage> {
         children: [
           const Icon(Icons.mail_lock, size: 80, color: Colors.blueAccent),
           const SizedBox(height: 24),
-          // Enhanced privacy info with encryption details
+          
+          // Privacy info
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -122,23 +122,11 @@ class _MailPageState extends State<MailPage> {
                     ),
                   ],
                 ),
-                const SizedBox(height: 4),
-                const Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('🔒 ', style: TextStyle(fontSize: 13)),
-                    Expanded(
-                      child: Text(
-                        'Messages parsed server-side on encrypted data',
-                        style: TextStyle(fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
               ],
             ),
           ),
           const SizedBox(height: 24),
+          
           TextField(
             controller: _usernameController,
             decoration: const InputDecoration(
@@ -151,6 +139,7 @@ class _MailPageState extends State<MailPage> {
             keyboardType: TextInputType.emailAddress,
           ),
           const SizedBox(height: 16),
+          
           TextField(
             controller: _passwordController,
             decoration: const InputDecoration(
@@ -162,6 +151,7 @@ class _MailPageState extends State<MailPage> {
             obscureText: true,
           ),
           const SizedBox(height: 24),
+          
           ElevatedButton.icon(
             onPressed: mailService.isLoading ? null : () async {
               final username = _usernameController.text.trim();
@@ -200,14 +190,15 @@ class _MailPageState extends State<MailPage> {
                   ),
                 )
               : const Icon(Icons.lock),
-            label: Text(mailService.isLoading ? 'Encrypting & Connecting...' : 'Secure Login'),
+            label: Text(mailService.isLoading ? 'Connecting...' : 'Secure Login'),
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
               backgroundColor: Colors.green,
             ),
           ),
+          
           _buildStatusMessage(mailService),
-          _buildDebugSection(mailService),
+          
           const SizedBox(height: 16),
           const Text(
             'Need an account? Create one at:\nhttp://127.0.0.1:7657/susimail/',
@@ -260,72 +251,11 @@ class _MailPageState extends State<MailPage> {
       ],
     );
   }
-
-  Widget _buildDebugSection(Pop3MailService mailService) {
-    if (!mailService.debugMode || mailService.debugLog.isEmpty) {
-      return const SizedBox.shrink();
-    }
-    
-    return Column(
-      children: [
-        const SizedBox(height: 16),
-        TextButton.icon(
-          onPressed: () {
-            showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              builder: (context) => Container(
-                height: MediaQuery.of(context).size.height * 0.7,
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Encryption Debug Log',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.close),
-                          onPressed: () => Navigator.pop(context),
-                        ),
-                      ],
-                    ),
-                    const Divider(),
-                    Expanded(
-                      child: ListView.builder(
-                        itemCount: mailService.debugLog.length,
-                        itemBuilder: (context, index) {
-                          return Text(
-                            mailService.debugLog[index],
-                            style: const TextStyle(
-                              fontFamily: 'monospace',
-                              fontSize: 12,
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-          icon: const Icon(Icons.bug_report),
-          label: Text('View Encryption Log (${mailService.debugLog.length})'),
-        ),
-      ],
-    );
-  }
   
   Widget _buildInboxView(BuildContext context, Pop3MailService mailService) {
     return Column(
       children: [
-        // Enhanced header with encryption indicator
+        // Header
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -380,7 +310,7 @@ class _MailPageState extends State<MailPage> {
                     ],
                   ),
                   Text(
-                    '${mailService.username}@mail.i2p (encrypted)',
+                    '${mailService.username}@mail.i2p',
                     style: TextStyle(
                       fontSize: 12,
                       color: Colors.grey.shade600,
@@ -413,7 +343,7 @@ class _MailPageState extends State<MailPage> {
           ),
         ),
         
-        // Enhanced compose button with encryption indicator
+        // Compose button
         Padding(
           padding: const EdgeInsets.all(16),
           child: ElevatedButton.icon(
@@ -485,7 +415,7 @@ class _MailPageState extends State<MailPage> {
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text('Decrypting messages...'),
+            Text('Loading encrypted messages...'),
           ],
         ),
       );
@@ -503,7 +433,7 @@ class _MailPageState extends State<MailPage> {
             ),
             const SizedBox(height: 16),
             Text(
-              'No encrypted messages',
+              'No messages',
               style: TextStyle(
                 fontSize: 18,
                 color: Colors.grey.shade600,
@@ -612,7 +542,6 @@ class _MailPageState extends State<MailPage> {
                 ],
               ),
               onTap: () async {
-                // Load full encrypted message
                 final fullMessage = await mailService.getMessage(message.id);
                 if (fullMessage != null && mounted) {
                   Navigator.push(
@@ -625,7 +554,6 @@ class _MailPageState extends State<MailPage> {
                     ),
                   );
                   
-                  // Mark as read in list
                   setState(() {
                     message.isRead = true;
                   });

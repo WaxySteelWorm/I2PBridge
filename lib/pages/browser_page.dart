@@ -187,7 +187,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
         final encryptedUrl = _encryption.encryptUrl(cleanUrl);
         
         final response = await http.post(
-          Uri.parse('http://bridge.stormycloud.org:3000/api/v1/browse'),
+          Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
           headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
             'X-Session-Token': sessionToken,
@@ -212,7 +212,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
         }
       } else {
         // Standard unencrypted mode
-        final Uri browseUrl = Uri.parse('http://bridge.stormycloud.org:3000/api/v1/browse?url=$cleanUrl');
+        final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=$cleanUrl');
         final headers = <String, String>{};
         if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
         
@@ -364,8 +364,8 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                         ? Center(
                             child: CachedNetworkImage(
                               imageUrl: _encryptionEnabled 
-                                ? 'http://bridge.stormycloud.org:3000/api/v1/browse'
-                                : 'http://bridge.stormycloud.org:3000/api/v1/browse?url=$currentUrl',
+                                ? 'https://bridge.stormycloud.org/api/v1/browse'
+                                : 'https://bridge.stormycloud.org/api/v1/browse?url=$currentUrl',
                               httpHeaders: _encryptionEnabled 
                                 ? {
                                     'Content-Type': 'application/x-www-form-urlencoded',
@@ -395,7 +395,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                                   } 
                                   final currentUri = Uri.parse('http://$currentUrl'); 
                                   final imageUrl = currentUri.resolve(src).toString(); 
-                                  final proxiedUrl = 'http://bridge.stormycloud.org:3000/api/v1/browse?url=${imageUrl.replaceFirst(RegExp(r'^https?://'), '')}'; 
+                                  final proxiedUrl = 'https://bridge.stormycloud.org/api/v1/browse?url=${imageUrl.replaceFirst(RegExp(r'^https?://'), '')}'; 
                                   if (proxiedUrl.endsWith('.svg')) { 
                                     return SvgPicture.network( 
                                       proxiedUrl, 
@@ -430,12 +430,6 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
   Widget _buildPopularSitesList() {
     return Column(
       children: [
-        const SizedBox(height: 10),
-        Icon(
-          Icons.language,
-          size: 64,
-          color: Theme.of(context).colorScheme.primary.withOpacity(0.5),
-        ),
         const SizedBox(height: 16),
         Text(
           _encryptionEnabled 
