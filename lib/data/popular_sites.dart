@@ -10,9 +10,9 @@ class Site {
 
 final List<Site> popularSites = [
   Site(
-    name: 'I2P Project Homepage',
-    url: 'i2p-projekt.i2p',
-    description: 'The official homepage for the I2P project.',
+    name: 'NotBob',
+    url: 'notbob.i2p',
+    description: 'The xxxx',
   ),
   Site(
     name: 'I2P Forum',
@@ -20,13 +20,18 @@ final List<Site> popularSites = [
     description: 'Community discussion forums for I2P.',
   ),
   Site(
-    name: 'The Onion Router',
-    url: 'torproject.org',
-    description: 'The main website for the Tor Project.',
+    name: 'Shinobi',
+    url: 'shinobi.i2p',
+    description: 'The largest I2P Search Engine.',
   ),
   Site(
     name: 'Ramble',
     url: 'ramble.i2p',
     description: 'A popular I2P-based social media platform.',
+  ),
+    Site(
+    name: 'Natter',
+    url: 'natter.i2p',
+    description: 'Twitter alternative on I2P.',
   ),
 ];

@@ -3,13 +3,15 @@
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:async'; // Add this import for TimeoutException
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:crypto/crypto.dart';
 import '../assets/drop_logo.dart';
 
 class UploadPage extends StatefulWidget {
@@ -31,10 +33,16 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
   
   late AnimationController _animationController;
   late Animation<double> _fadeAnimation;
+  late http.Client _httpClient;
+
+  // SSL Pinning configuration
+  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
 
   @override
   void initState() {
     super.initState();
+    _httpClient = _createPinnedHttpClient();
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
@@ -49,8 +57,35 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
     _animationController.forward();
   }
 
+  http.Client _createPinnedHttpClient() {
+    final httpClient = HttpClient();
+    httpClient.userAgent = appUserAgent;
+    
+    httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (host != 'bridge.stormycloud.org') {
+        return false; // Only pin our specific domain
+      }
+      
+      try {
+        // Get the public key from the certificate
+        final publicKeyBytes = cert.der;
+        final publicKeyHash = sha256.convert(publicKeyBytes);
+        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        
+        // Compare with expected hash
+        return publicKeyHashBase64 == expectedPublicKeyHash;
+      } catch (e) {
+        print('Certificate validation error: $e');
+        return false;
+      }
+    };
+    
+    return IOClient(httpClient);
+  }
+
   @override
   void dispose() {
+    _httpClient.close();
     _animationController.dispose();
     _passwordController.dispose();
     _maxViewsController.dispose();
@@ -100,7 +135,13 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         
         var request = http.MultipartRequest(
           'POST', 
-          Uri.parse('http://bridge.stormycloud.org:3000/api/v1/upload')
+          Uri.parse('https://bridge.stormycloud.org/api/v1/upload')
+        );
+        
+        // Use the pinned HTTP client
+        request = http.MultipartRequest(
+          'POST', 
+          Uri.parse('https://bridge.stormycloud.org/api/v1/upload')
         );
         
         request.files.add(
@@ -119,18 +160,18 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         }
         request.fields['expiry'] = _selectedExpiry;
 
-        // Set timeout
-        var response = await request.send().timeout(
+        // Set timeout and send with pinned client
+        var streamedResponse = await _httpClient.send(request).timeout(
           const Duration(seconds: 30),
           onTimeout: () {
             throw Exception('Upload timed out');
           },
         );
         
-        final responseBody = await response.stream.bytesToString();
+        final responseBody = await streamedResponse.stream.bytesToString();
         final decodedBody = json.decode(responseBody);
 
-        if (response.statusCode == 200) {
+        if (streamedResponse.statusCode == 200) {
           final rawUrl = decodedBody['url'];
           final uri = Uri.tryParse(rawUrl);
           String finalUrl = (uri != null && uri.hasAbsolutePath) 

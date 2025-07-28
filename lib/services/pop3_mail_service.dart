@@ -1,14 +1,18 @@
 // lib/services/pop3_mail_service.dart
-// Mail service with end-to-end encryption - server cannot read emails or credentials
+// Production mail service with end-to-end encryption
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
 import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 
 class EmailMessage {
   final String id;
@@ -86,27 +90,28 @@ class EncryptedCredentials {
 
 class Pop3MailService with ChangeNotifier {
   // Encryption components
-  late final Uint8List _credentialKey;
-  late final Uint8List _credentialIV;
+  late Uint8List _credentialKey;
+  late Uint8List _credentialIV;
   EncryptedCredentials? _encryptedCredentials;
-  
+
   bool _isConnected = false;
   bool _isLoading = false;
   bool _isSending = false;
   String? _username;
-  
+
   List<EmailMessage> _messages = [];
   int _totalMessages = 0;
   String _statusMessage = '';
   String _lastError = '';
-  
+
   // Server configuration
-  static const String _serverBaseUrl = 'http://bridge.stormycloud.org:3000';
+  static const String _serverBaseUrl = 'https://bridge.stormycloud.org';
   
-  // Debug mode
-  bool debugMode = true;
-  List<String> debugLog = [];
-  
+  // SSL Pinning configuration
+  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
+  late http.Client _httpClient;
+
   bool get isConnected => _isConnected;
   bool get isLoading => _isLoading;
   bool get isSending => _isSending;
@@ -118,13 +123,39 @@ class Pop3MailService with ChangeNotifier {
 
   Pop3MailService() {
     _initializeEncryption();
+    _httpClient = _createPinnedHttpClient();
+  }
+
+  http.Client _createPinnedHttpClient() {
+    final httpClient = HttpClient();
+    httpClient.userAgent = appUserAgent;
+    
+    httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (host != 'bridge.stormycloud.org') {
+        return false; // Only pin our specific domain
+      }
+      
+      try {
+        // Get the public key from the certificate
+        final publicKeyBytes = cert.der;
+        final publicKeyHash = sha256.convert(publicKeyBytes);
+        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        
+        // Compare with expected hash
+        return publicKeyHashBase64 == expectedPublicKeyHash;
+      } catch (e) {
+        print('Certificate validation error: $e');
+        return false;
+      }
+    };
+    
+    return IOClient(httpClient);
   }
 
   void _initializeEncryption() {
     final secureRandom = _getSecureRandom();
-    _credentialKey = secureRandom.nextBytes(32); // 256-bit key
-    _credentialIV = secureRandom.nextBytes(16);  // 128-bit IV
-    _debug('Encryption initialized');
+    _credentialKey = secureRandom.nextBytes(32);
+    _credentialIV = secureRandom.nextBytes(16);
   }
 
   SecureRandom _getSecureRandom() {
@@ -145,12 +176,11 @@ class Pop3MailService with ChangeNotifier {
         null
       );
       cipher.init(true, params);
-      
+
       final plainBytes = utf8.encode(plaintext);
       final encrypted = cipher.process(Uint8List.fromList(plainBytes));
       return base64.encode(encrypted);
     } catch (e) {
-      _debug('Encryption error: $e');
       rethrow;
     }
   }
@@ -163,12 +193,11 @@ class Pop3MailService with ChangeNotifier {
         null
       );
       cipher.init(false, params);
-      
+
       final encryptedBytes = base64.decode(encryptedData);
       final decrypted = cipher.process(encryptedBytes);
       return utf8.decode(decrypted);
     } catch (e) {
-      _debug('Decryption error: $e');
       rethrow;
     }
   }
@@ -176,7 +205,7 @@ class Pop3MailService with ChangeNotifier {
   EncryptedCredentials _encryptCredentials(String username, String password) {
     final encryptedUser = _encryptString(username, _credentialKey, _credentialIV);
     final encryptedPass = _encryptString(password, _credentialKey, _credentialIV);
-    
+
     return EncryptedCredentials(
       encryptedUser: encryptedUser,
       encryptedPass: encryptedPass,
@@ -189,31 +218,17 @@ class Pop3MailService with ChangeNotifier {
     try {
       if (!encryptedResponse.containsKey('encrypted') || 
           encryptedResponse['encrypted'] != true) {
-        return encryptedResponse; // Not encrypted
+        return encryptedResponse;
       }
-      
+
       final encryptedData = encryptedResponse['data'];
       final key = base64.decode(encryptedResponse['key']);
       final iv = base64.decode(encryptedResponse['iv']);
-      
+
       final decrypted = _decryptString(encryptedData, key, iv);
       return json.decode(decrypted);
     } catch (e) {
-      _debug('Error decrypting mail content: $e');
       rethrow;
-    }
-  }
-
-  void _debug(String message) {
-    if (debugMode) {
-      final timestamp = DateTime.now().toString().substring(11, 19);
-      final logMessage = '[$timestamp] $message';
-      print('[MAIL_ENCRYPTED] $logMessage');
-      debugLog.add(logMessage);
-      if (debugLog.length > 200) {
-        debugLog.removeAt(0);
-      }
-      notifyListeners();
     }
   }
 
@@ -222,33 +237,21 @@ class Pop3MailService with ChangeNotifier {
     notifyListeners();
   }
 
-  // Connect using encrypted credentials
   Future<bool> connect(String username, String password) async {
     try {
-      _debug('=== Connecting with Encrypted Credentials ===');
-      _debug('Username: $username (encrypted before sending)');
-      
       _isLoading = true;
       _username = username;
       _lastError = '';
-      debugLog.clear();
-      _updateStatus('Encrypting credentials...');
+      _updateStatus('Connecting securely...');
 
-      // Encrypt credentials client-side
       _encryptedCredentials = _encryptCredentials(username, password);
-      _debug('Credentials encrypted successfully');
 
-      // Add this after: _encryptedCredentials = _encryptCredentials(username, password);
-_debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
-      
-      _updateStatus('Testing encrypted connection...');
-      
-      // Test connection with encrypted credentials
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -256,25 +259,21 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
           'count': 1,
         }),
       ).timeout(const Duration(seconds: 30));
-      
+
       if (response.statusCode == 200) {
         final encryptedData = json.decode(response.body);
         final data = _decryptMailContent(encryptedData);
-        
-        _debug('Encrypted authentication successful! Found ${data['messageCount'] ?? 0} messages');
-        
+
         _isConnected = true;
-        _updateStatus('Securely connected');
+        _updateStatus('Loading messages...');
         notifyListeners();
 
-        // Get the full message list
         await _updateMessageList();
-        
+
         _isLoading = false;
         _updateStatus('');
         return true;
       } else {
-        _debug('ERROR: Server returned ${response.statusCode}');
         if (response.statusCode == 400) {
           _lastError = 'Invalid username or password';
         } else if (response.statusCode == 500) {
@@ -284,17 +283,13 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
         }
       }
     } catch (e) {
-      _debug('CONNECTION ERROR: $e');
-      
       if (e.toString().contains('TimeoutException')) {
         _lastError = 'Connection timeout - please try again';
-      } else if (e.toString().contains('Invalid encrypted credentials')) {
-        _lastError = 'Encryption error - please restart the app';
       } else {
-        _lastError = 'Connection failed: ${e.toString()}';
+        _lastError = 'Connection failed';
       }
     }
-    
+
     _isLoading = false;
     _isConnected = false;
     _updateStatus('');
@@ -302,22 +297,19 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
     return false;
   }
 
-  // Get encrypted message list
   Future<void> _updateMessageList() async {
     if (!_isConnected || _encryptedCredentials == null) return;
-    
+
     _isLoading = true;
-    _updateStatus('Loading encrypted messages...');
     notifyListeners();
 
     try {
-      _debug('Fetching encrypted message headers...');
-      
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -325,16 +317,14 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
           'count': 50,
         }),
       ).timeout(const Duration(seconds: 45));
-      
+
       if (response.statusCode == 200) {
         final encryptedData = json.decode(response.body);
         final data = _decryptMailContent(encryptedData);
-        
-        _debug('Decrypted headers for ${data['messages']?.length ?? 0} messages');
-        
+
         _messages.clear();
         _totalMessages = data['messageCount'] ?? 0;
-        
+
         if (data['messages'] != null) {
           for (final messageData in data['messages']) {
             final emailMessage = EmailMessage(
@@ -342,43 +332,39 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
               from: messageData['from'] ?? 'Unknown',
               subject: messageData['subject'] ?? '(No Subject)',
               date: _formatServerDate(messageData['date']),
-              body: '', // Will be loaded on demand
+              body: '',
               size: 0,
               isRead: false,
               isPreloaded: false,
             );
-            
+
             _messages.add(emailMessage);
           }
         }
-        
-        _debug('Loaded ${_messages.length} encrypted message headers successfully');
+
         _isLoading = false;
         _updateStatus('');
         notifyListeners();
-        
-        // Start prefetching top messages in background
+
         _prefetchRecentMessages();
-        
+
       } else {
-        _debug('ERROR: Server returned ${response.statusCode}: ${response.body}');
         throw Exception('Server error: ${response.statusCode}');
       }
-      
+
     } catch (e) {
-      _debug('ERROR fetching encrypted headers: $e');
       _isLoading = false;
-      
+
       if (e.toString().contains('TimeoutException')) {
         _lastError = 'Loading messages timed out. I2P network is slow - please try again.';
         _updateStatus('Timeout - please try refreshing');
       } else {
-        _lastError = 'Failed to load messages: ${e.toString()}';
+        _lastError = 'Failed to load messages';
         _updateStatus('Error loading messages');
       }
-      
+
       notifyListeners();
-      
+
       Future.delayed(const Duration(seconds: 5), () {
         _updateStatus('');
         notifyListeners();
@@ -386,71 +372,63 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
     }
   }
 
-  // Prefetch recent messages with encryption
-  Future<void> _prefetchRecentMessages() async {
-    if (_messages.isEmpty) return;
-    
-    _debug('Starting encrypted prefetch of recent messages...');
-    
-    final messagesToPrefetch = _messages.take(3).toList(); // Reduced for I2P
-    
-    int successCount = 0;
-    int maxAttempts = 3;
-    
-    for (final message in messagesToPrefetch) {
-      if (!_isConnected) break;
-      if (message.isPreloaded) continue;
-      if (successCount >= maxAttempts) break;
-      
-      try {
-        _debug('Prefetching encrypted message ${message.id}...');
-        final fullMessage = await _fetchEncryptedMessageSilently(message.id);
-        
-        if (fullMessage != null) {
-          message.body = fullMessage.body;
-          message.htmlBody = fullMessage.htmlBody;
-          message.isPreloaded = true;
-          successCount++;
-          _debug('Prefetched encrypted message ${message.id} successfully');
-        }
-        
-        await Future.delayed(const Duration(milliseconds: 1500));
-      } catch (e) {
-        _debug('Error prefetching encrypted message ${message.id}: $e');
-      }
-    }
-    
-    _debug('Finished encrypted prefetching (${successCount} successful)');
-  }
+Future<void> _prefetchRecentMessages() async {
+  if (_messages.isEmpty) return;
 
-  // Fetch encrypted message silently
+  // Load user preference for prefetch count
+  final prefs = await SharedPreferences.getInstance();
+  final int prefetchCount = prefs.getInt('prefetch_count') ?? 5; // Default to 5
+
+  final messagesToPrefetch = _messages.take(prefetchCount).toList();
+
+  for (final message in messagesToPrefetch) {
+    if (!_isConnected) break;
+    if (message.isPreloaded) continue;
+
+    try {
+      final fullMessage = await _fetchEncryptedMessageSilently(message.id);
+
+      if (fullMessage != null) {
+        message.body = fullMessage.body;
+        message.htmlBody = fullMessage.htmlBody;
+        message.isPreloaded = true;
+      }
+
+      await Future.delayed(const Duration(milliseconds: 1500));
+    } catch (e) {
+      // Continue with next message
+    }
+  }
+}
+
   Future<EmailMessage?> _fetchEncryptedMessageSilently(String messageId) async {
     if (!_isConnected || _encryptedCredentials == null) return null;
-    
+
     try {
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
         }),
       ).timeout(const Duration(seconds: 15));
-      
+
       if (response.statusCode == 200) {
         final encryptedData = json.decode(response.body);
         final data = _decryptMailContent(encryptedData);
-        
+
         final List<EmailAttachment> attachments = [];
         if (data['attachments'] != null) {
           for (final attachmentData in data['attachments']) {
             attachments.add(EmailAttachment.fromJson(attachmentData));
           }
         }
-        
+
         return EmailMessage(
           id: messageId,
           from: data['from']?.toString() ?? 'Unknown',
@@ -478,7 +456,7 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
 
   String _formatServerDate(dynamic dateData) {
     if (dateData == null) return 'Unknown date';
-    
+
     try {
       final DateTime date = DateTime.parse(dateData.toString());
       return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
@@ -487,14 +465,11 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
     }
   }
 
-  // Get full encrypted message
   Future<EmailMessage?> getMessage(String messageId) async {
     if (!_isConnected || _encryptedCredentials == null) {
-      _debug('ERROR: Not connected or missing encrypted credentials');
       return null;
     }
-    
-    // Check if message is already prefetched
+
     final existingMessage = _messages.firstWhere(
       (msg) => msg.id == messageId,
       orElse: () => EmailMessage(
@@ -506,42 +481,38 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
         size: 0,
       ),
     );
-    
+
     if (existingMessage.id.isNotEmpty && existingMessage.isPreloaded && existingMessage.body.isNotEmpty) {
-      _debug('Using prefetched encrypted message body for message $messageId');
       return existingMessage;
     }
-    
-    _updateStatus('Loading encrypted message...');
-    
+
+    _updateStatus('Loading message...');
+
     try {
-      _debug('Fetching encrypted parsed message $messageId...');
-      
-      final response = await http.post(
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
         }),
       ).timeout(const Duration(seconds: 30));
-      
+
       if (response.statusCode == 200) {
         final encryptedData = json.decode(response.body);
         final data = _decryptMailContent(encryptedData);
-        
-        _debug('Decrypted parsed message data successfully');
-        
+
         final List<EmailAttachment> attachments = [];
         if (data['attachments'] != null) {
           for (final attachmentData in data['attachments']) {
             attachments.add(EmailAttachment.fromJson(attachmentData));
           }
         }
-        
+
         final emailMessage = EmailMessage(
           id: messageId,
           from: data['from']?.toString() ?? 'Unknown',
@@ -554,8 +525,7 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
           isPreloaded: true,
           attachments: attachments,
         );
-        
-        // Update the existing message in the list
+
         final existingIndex = _messages.indexWhere((msg) => msg.id == messageId);
         if (existingIndex != -1) {
           _messages[existingIndex].body = emailMessage.body;
@@ -563,153 +533,134 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
           _messages[existingIndex].isPreloaded = true;
           _messages[existingIndex].isRead = true;
         }
-        
+
         _updateStatus('');
         return emailMessage;
       } else {
-        _debug('ERROR: Server returned ${response.statusCode}');
         _updateStatus('');
         return null;
       }
     } catch (e) {
-      _debug('ERROR fetching encrypted parsed message: $e');
       _updateStatus('');
       return null;
     }
   }
 
-  // Delete message with encrypted credentials
   Future<bool> deleteMessage(String messageId) async {
     if (!_isConnected || _encryptedCredentials == null) {
-      _debug('ERROR: Not connected, cannot delete message');
       return false;
     }
-    
+
     try {
-      _debug('Deleting message $messageId via encrypted request...');
-      
-      final response = await http.delete(
+      final response = await _httpClient.delete(
         Uri.parse('$_serverBaseUrl/api/v1/mail/$messageId'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
         }),
       ).timeout(const Duration(seconds: 30));
-      
+
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
-          _debug('Message $messageId deleted successfully via encrypted request');
-          
-          // Remove from local list
           _messages.removeWhere((msg) => msg.id == messageId);
           notifyListeners();
-          
           return true;
         }
       }
-      
-      _debug('ERROR: Delete failed with status ${response.statusCode}');
-      _debug('Response body: ${response.body}');
+
       return false;
     } catch (e) {
-      _debug('ERROR deleting message with encryption: $e');
       return false;
     }
   }
 
-  // Send encrypted email
   Future<bool> sendEmail({
     required String to,
     required String subject,
     required String body,
   }) async {
     if (_encryptedCredentials == null) {
-      _debug('ERROR: No encrypted credentials for sending email');
       return false;
     }
-    
+
     _isSending = true;
-    _updateStatus('Encrypting and sending email...');
+    _updateStatus('Sending securely...');
     notifyListeners();
-    
+
     try {
-      _debug('=== Sending Encrypted Email ===');
-      
-      // Encrypt email content
       final emailKey = _getSecureRandom().nextBytes(32);
       final emailIV = _getSecureRandom().nextBytes(16);
-      
+
       final emailData = {
         'to': to,
         'subject': subject,
         'body': body,
         'timestamp': DateTime.now().toIso8601String(),
       };
-      
+
       final encryptedEmailData = {
         'encrypted': true,
         'data': _encryptString(json.encode(emailData), emailKey, emailIV),
         'key': base64.encode(emailKey),
         'iv': base64.encode(emailIV),
       };
-      
-      final response = await http.post(
+
+      final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/send'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
+          'User-Agent': appUserAgent,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'emailData': encryptedEmailData,
         }),
       ).timeout(const Duration(seconds: 60));
-      
+
       if (response.statusCode == 200) {
         final encryptedResponse = json.decode(response.body);
         final result = _decryptMailContent(encryptedResponse);
-        
+
         if (result['success'] == true) {
-          _debug('Encrypted email sent successfully');
           _isSending = false;
-          _updateStatus('Email sent securely!');
-          
+          _updateStatus('Message sent!');
+
           Future.delayed(const Duration(seconds: 2), () {
             _updateStatus('');
             notifyListeners();
           });
-          
+
           return true;
         }
       }
-      
-      _debug('ERROR: Send failed with status ${response.statusCode}');
+
       throw Exception('Server error: ${response.statusCode}');
-      
+
     } catch (e) {
-      _debug('ERROR sending encrypted email: $e');
       _isSending = false;
-      _lastError = 'Failed to send encrypted email: ${e.toString()}';
+      _lastError = 'Failed to send message';
       _updateStatus('');
-      
+
       notifyListeners();
       return false;
     }
   }
-  
+
   String formatReplyBody(EmailMessage originalMessage) {
     final date = originalMessage.date;
     final from = originalMessage.from;
     final body = originalMessage.body;
-    
+
     final quotedBody = body.split('\n').map((line) => '> $line').join('\n');
     return '\n\nOn $date, $from wrote:\n$quotedBody';
   }
-  
+
   String getReplySubject(String originalSubject) {
     if (originalSubject.startsWith('Re:')) {
       return originalSubject;
@@ -718,13 +669,10 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
   }
 
   Future<void> refresh() async {
-    _debug('Refreshing encrypted inbox...');
     await _updateMessageList();
   }
 
   void disconnect() {
-    _debug('Disconnecting encrypted session...');
-    
     _isConnected = false;
     _isSending = false;
     _username = null;
@@ -733,16 +681,19 @@ _debug('Encrypted credentials created: ${_encryptedCredentials!.toJson()}');
     _totalMessages = 0;
     _statusMessage = '';
     _lastError = '';
-    
-    // Reinitialize encryption for next session
+
+    // Explicitly nullify the encryption fields
+    _credentialKey = Uint8List(0);
+    _credentialIV = Uint8List(0);
+
+    // Reinitialize encryption fields
     _initializeEncryption();
-    
-    _debug('Encrypted session disconnected');
     notifyListeners();
   }
 
   @override
   void dispose() {
+    _httpClient.close();
     disconnect();
     super.dispose();
   }

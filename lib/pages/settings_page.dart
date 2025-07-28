@@ -1,10 +1,11 @@
 // lib/pages/settings_page.dart
-// This version adds links to the new Privacy Policy and TOS pages.
+// Adds link to the new Email Settings page.
 
 import 'package:flutter/material.dart';
 import 'irc_settings_page.dart';
-import 'privacy_policy_page.dart'; // Import new page
-import 'tos_page.dart'; // Import new page
+import 'email_settings_page.dart'; // Import Email Settings
+import 'privacy_policy_page.dart';
+import 'tos_page.dart';
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
@@ -17,6 +18,7 @@ class SettingsPage extends StatelessWidget {
       ),
       body: ListView(
         children: [
+          // IRC Settings
           ListTile(
             leading: const Icon(Icons.chat_bubble_outline),
             title: const Text('IRC Settings'),
@@ -28,7 +30,19 @@ class SettingsPage extends StatelessWidget {
             },
           ),
           const Divider(),
-          // --- NEW: Legal Section ---
+          // Email Settings
+          ListTile(
+            leading: const Icon(Icons.email_outlined),
+            title: const Text('Email Settings'),
+            subtitle: const Text('Configure email preferences like prefetch count'),
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => const EmailSettingsPage()),
+              );
+            },
+          ),
+          const Divider(),
+          // Legal Section
           const ListTile(
             title: Text('Legal', style: TextStyle(color: Colors.grey)),
           ),
@@ -36,7 +50,7 @@ class SettingsPage extends StatelessWidget {
             leading: const Icon(Icons.privacy_tip_outlined),
             title: const Text('Privacy Policy'),
             onTap: () {
-               Navigator.of(context).push(
+              Navigator.of(context).push(
                 MaterialPageRoute(builder: (context) => const PrivacyPolicyPage()),
               );
             },
@@ -45,7 +59,7 @@ class SettingsPage extends StatelessWidget {
             leading: const Icon(Icons.gavel_outlined),
             title: const Text('Terms of Service'),
             onTap: () {
-               Navigator.of(context).push(
+              Navigator.of(context).push(
                 MaterialPageRoute(builder: (context) => const TermsOfServicePage()),
               );
             },
