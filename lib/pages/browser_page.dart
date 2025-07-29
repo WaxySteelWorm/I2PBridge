@@ -1,5 +1,5 @@
 // lib/pages/browser_page.dart
-// Redesigned browser with cleaner privacy UI
+// Clean browser without debug logs
 
 import 'dart:convert';
 import 'dart:io';
@@ -23,7 +23,7 @@ class BrowserPage extends StatefulWidget {
 
 class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStateMixin {
   final TextEditingController _urlController = TextEditingController();
-  final EncryptionService _encryption = EncryptionService(); // Singleton instance
+  final EncryptionService _encryption = EncryptionService();
   
   String? _pageContent;
   String _contentType = 'text/html';
@@ -34,43 +34,32 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
   int _historyIndex = -1;
   final Map<String, String> _cache = {};
   
-  // Animation controller for the lock icon
   late AnimationController _lockAnimationController;
   late Animation<double> _lockAnimation;
   
-  // SSL Pinning configuration
   static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   late http.Client _httpClient;
   
-  bool get _canGoBack {
-    return _historyIndex > 0 || (_historyIndex == 0 && _pageContent != null);
-  }
+  bool get _canGoBack => _historyIndex > 0 || (_historyIndex == 0 && _pageContent != null);
   bool get _canGoForward => _historyIndex < _history.length - 1;
   bool get _canRefresh => _history.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
-    _encryption.initialize(); // Safe to call multiple times
+    _encryption.initialize();
     _httpClient = _createPinnedHttpClient();
     
-    // Initialize animation
     _lockAnimationController = AnimationController(
       duration: const Duration(milliseconds: 300),
       vsync: this,
     );
-    _lockAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _lockAnimationController,
-      curve: Curves.easeInOut,
-    ));
+    _lockAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _lockAnimationController, curve: Curves.easeInOut)
+    );
     
-    if (_encryptionEnabled) {
-      _lockAnimationController.forward();
-    }
+    if (_encryptionEnabled) _lockAnimationController.forward();
     
     if (widget.initialUrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadPage(widget.initialUrl!));
@@ -79,26 +68,17 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
 
   http.Client _createPinnedHttpClient() {
     final httpClient = HttpClient();
-    
     httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
-      if (host != 'bridge.stormycloud.org') {
-        return false; // Only pin our specific domain
-      }
-      
+      if (host != 'bridge.stormycloud.org') return false;
       try {
-        // Get the public key from the certificate
         final publicKeyBytes = cert.der;
         final publicKeyHash = sha256.convert(publicKeyBytes);
         final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
-        
-        // Compare with expected hash
         return publicKeyHashBase64 == expectedPublicKeyHash;
       } catch (e) {
-        print('Certificate validation error: $e');
         return false;
       }
     };
-    
     return IOClient(httpClient);
   }
 
@@ -121,27 +101,18 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
       _lockAnimationController.reverse();
     }
     
-    // Show snackbar with animation
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
           children: [
-            Icon(
-              _encryptionEnabled ? Icons.lock : Icons.lock_open,
-              color: Colors.white,
-              size: 20,
-            ),
+            Icon(_encryptionEnabled ? Icons.lock : Icons.lock_open, color: Colors.white, size: 20),
             const SizedBox(width: 8),
-            Text(_encryptionEnabled 
-              ? 'Privacy Mode enabled' 
-              : 'Privacy Mode disabled'),
+            Text(_encryptionEnabled ? 'Privacy Mode enabled' : 'Privacy Mode disabled'),
           ],
         ),
         backgroundColor: _encryptionEnabled ? Colors.green : Colors.orange,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(10),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -215,40 +186,52 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
 
     try {
       if (_encryptionEnabled) {
-        // Use privacy-preserving approach
-        await Future.delayed(Duration(milliseconds: DateTime.now().millisecond % 500));
+        final delayMs = DateTime.now().millisecond % 500;
+        await Future.delayed(Duration(milliseconds: delayMs));
         
         final sessionToken = _encryption.generateChannelId();
-        final encryptedUrl = _encryption.encryptUrl(cleanUrl);
+        final encryptedUrl = _encryption.encryptUrl(fullUrl);
+        
+        final headers = {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Session-Token': sessionToken,
+          'X-Privacy-Mode': 'enabled',
+          'User-Agent': appUserAgent,
+          if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
+        };
+        
+        final body = 'url=$encryptedUrl&encrypted=true';
         
         final response = await _httpClient.post(
           Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Session-Token': sessionToken,
-            'X-Privacy-Mode': 'enabled',
-            'User-Agent': appUserAgent,
-            if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
-          },
-          body: 'url=$encryptedUrl&encrypted=true',
+          headers: headers,
+          body: body,
         ).timeout(const Duration(seconds: 30));
         
         if (response.statusCode == 200) {
-          final newContent = response.body;
-          final newContentType = response.headers['content-type'] ?? 'text/html';
-          setState(() { 
-            _pageContent = newContent; 
-            _contentType = newContentType; 
-          });
-          if (newContentType.startsWith('text/html')) {
-            _cache[cleanUrl] = newContent;
+          try {
+            final jsonResponse = jsonDecode(response.body);
+            final newContent = jsonResponse['content'] ?? response.body;
+            final newContentType = jsonResponse['headers']?['content-type'] ?? 'text/html';
+            setState(() { 
+              _pageContent = newContent; 
+              _contentType = newContentType; 
+            });
+            if (newContentType.startsWith('text/html')) {
+              _cache[cleanUrl] = newContent;
+            }
+          } catch (e) {
+            setState(() { 
+              _pageContent = response.body; 
+              _contentType = 'text/html'; 
+            });
           }
         } else {
           setState(() => _pageContent = 'Error: ${response.statusCode}\n\n${response.body}');
         }
       } else {
-        // Standard unencrypted mode
-        final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=$cleanUrl');
+        final urlToSend = fullUrl;
+        final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(urlToSend)}');
         final headers = <String, String>{
           'User-Agent': appUserAgent,
         };
@@ -257,10 +240,20 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
         final response = await _httpClient.get(browseUrl, headers: headers).timeout(const Duration(seconds: 30));
         
         if (response.statusCode == 200) {
-          final newContent = response.body;
-          final newContentType = response.headers['content-type'] ?? 'text/html';
-          setState(() { _pageContent = newContent; _contentType = newContentType; });
-          if (newContentType.startsWith('text/html')) _cache[cleanUrl] = newContent;
+          try {
+            final jsonResponse = jsonDecode(response.body);
+            final newContent = jsonResponse['content'] ?? response.body;
+            final newContentType = jsonResponse['headers']?['content-type'] ?? 'text/html';
+            setState(() { _pageContent = newContent; _contentType = newContentType; });
+            if (newContentType.startsWith('text/html')) {
+              _cache[cleanUrl] = newContent;
+            }
+          } catch (e) {
+            setState(() { 
+              _pageContent = response.body; 
+              _contentType = 'text/html'; 
+            });
+          }
         } else {
           setState(() => _pageContent = 'Error: ${response.statusCode}\n\n${response.body}');
         }
@@ -281,7 +274,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
       padding: const EdgeInsets.all(16.0),
       child: Column(
         children: <Widget>[
-          // Redesigned navigation bar with integrated lock
+          // Navigation bar
           Container(
             decoration: BoxDecoration(
               color: Theme.of(context).cardTheme.color,
@@ -313,7 +306,6 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                     ),
                     child: Row(
                       children: [
-                        // Animated lock icon in address bar
                         GestureDetector(
                           onTap: _toggleEncryption,
                           child: Container(
@@ -361,17 +353,12 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
             width: double.infinity, 
             child: ElevatedButton( 
               onPressed: _isLoading ? null : () => _loadPage(_urlController.text), 
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 12),
-              ),
+              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 12)),
               child: _isLoading 
                 ? const SizedBox(
                     height: 20,
                     width: 20,
-                    child: CircularProgressIndicator(
-                      color: Colors.white,
-                      strokeWidth: 2,
-                    ),
+                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                   )
                 : const Text('Go'), 
             ), 
@@ -391,10 +378,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                           children: [
                             const CircularProgressIndicator(),
                             const SizedBox(height: 16),
-                            Text(
-                              _pageContent!,
-                              style: const TextStyle(fontSize: 14),
-                            ),
+                            Text(_pageContent!, style: const TextStyle(fontSize: 14)),
                           ],
                         ),
                       )
@@ -411,9 +395,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
                                     'X-Privacy-Mode': 'enabled',
                                     'User-Agent': appUserAgent,
                                   }
-                                : {
-                                    'User-Agent': appUserAgent,
-                                  },
+                                : {'User-Agent': appUserAgent},
                               placeholder: (context, url) => const CircularProgressIndicator(), 
                               errorWidget: (context, url, error) => const Text('[Image failed to load]'),
                             )
@@ -473,25 +455,19 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
   Widget _buildPopularSitesList() {
     return Column(
       children: [
-        const SizedBox(height: 16),
+        const SizedBox(height: 8),
+        Icon(Icons.language, size: 60, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
+        const SizedBox(height: 12),
         Text(
-          _encryptionEnabled 
-            ? '🔒 Privacy Mode Active'
-            : '🔓 Standard Mode',
-          style: TextStyle(
-            fontSize: 14,
-            color: _encryptionEnabled ? Colors.green : Colors.orange,
-          ),
+          _encryptionEnabled ? '🔒 Privacy Mode Active' : '🔓 Standard Mode',
+          style: TextStyle(fontSize: 14, color: _encryptionEnabled ? Colors.green : Colors.orange),
         ),
-        const SizedBox(height: 32),
+        const SizedBox(height: 20),
         const Padding(
           padding: EdgeInsets.symmetric(horizontal: 32),
-          child: Text(
-            'Popular I2P Sites',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-          ),
+          child: Text('Popular I2P Sites', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
         Expanded(
           child: ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -499,57 +475,45 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
             itemBuilder: (context, index) {
               final site = popularSites[index];
               return Card(
-                margin: const EdgeInsets.only(bottom: 8),
+                margin: const EdgeInsets.only(bottom: 6),
                 child: ListTile(
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
                   leading: CircleAvatar(
+                    radius: 18,
                     backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
                     child: Text(
                       site.name[0].toUpperCase(),
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.primary,
                         fontWeight: FontWeight.bold,
+                        fontSize: 13,
                       ),
                     ),
                   ),
-                  title: Text(site.name),
-                  subtitle: Text(
-                    site.description,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                  trailing: Icon(
-                    Icons.arrow_forward_ios,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+                  title: Text(site.name, style: const TextStyle(fontSize: 14)),
+                  subtitle: Text(site.description, style: const TextStyle(fontSize: 11)),
+                  trailing: Icon(Icons.arrow_forward_ios, size: 14, color: Theme.of(context).colorScheme.primary),
                   onTap: () => _loadPage(site.url),
                 ),
               );
             },
           ),
         ),
-        // Privacy tip at bottom
         Container(
-          margin: const EdgeInsets.all(16),
-          padding: const EdgeInsets.all(12),
+          margin: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Row(
             children: [
-              Icon(
-                Icons.info_outline,
-                size: 20,
-                color: Theme.of(context).colorScheme.primary,
-              ),
+              Icon(Icons.info_outline, size: 18, color: Theme.of(context).colorScheme.primary),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   'Tap the lock icon in the address bar to toggle privacy mode',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
+                  style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.primary),
                 ),
               ),
             ],
