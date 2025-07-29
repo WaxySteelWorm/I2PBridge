@@ -1,5 +1,5 @@
 // lib/pages/browser_page.dart
-// Clean browser without debug logs
+// Fixed browser with no duplicate loading indicators and proper layout
 
 import 'dart:convert';
 import 'dart:io';
@@ -161,13 +161,15 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
     
     setState(() { 
       _isLoading = true; 
-      _pageContent = 'Loading $cleanUrl...'; 
       _contentType = 'text/html'; 
-      _urlController.text = cleanUrl; 
+      _urlController.text = cleanUrl;
     });
 
     if (!forceRefresh && _cache.containsKey(cleanUrl)) {
-      setState(() { _pageContent = _cache[cleanUrl]!; _isLoading = false; });
+      setState(() { 
+        _pageContent = _cache[cleanUrl]!; 
+        _isLoading = false;
+      });
       if (!fromHistory) {
         if (_history.isEmpty) _historyIndex = -1;
         if (_historyIndex < _history.length - 1) _history.removeRange(_historyIndex + 1, _history.length);
@@ -215,7 +217,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
             final newContentType = jsonResponse['headers']?['content-type'] ?? 'text/html';
             setState(() { 
               _pageContent = newContent; 
-              _contentType = newContentType; 
+              _contentType = newContentType;
             });
             if (newContentType.startsWith('text/html')) {
               _cache[cleanUrl] = newContent;
@@ -223,7 +225,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
           } catch (e) {
             setState(() { 
               _pageContent = response.body; 
-              _contentType = 'text/html'; 
+              _contentType = 'text/html';
             });
           }
         } else {
@@ -244,14 +246,17 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
             final jsonResponse = jsonDecode(response.body);
             final newContent = jsonResponse['content'] ?? response.body;
             final newContentType = jsonResponse['headers']?['content-type'] ?? 'text/html';
-            setState(() { _pageContent = newContent; _contentType = newContentType; });
+            setState(() { 
+              _pageContent = newContent; 
+              _contentType = newContentType;
+            });
             if (newContentType.startsWith('text/html')) {
               _cache[cleanUrl] = newContent;
             }
           } catch (e) {
             setState(() { 
               _pageContent = response.body; 
-              _contentType = 'text/html'; 
+              _contentType = 'text/html';
             });
           }
         } else {
@@ -369,81 +374,7 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
               margin: EdgeInsets.zero,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: _pageContent == null
-                  ? _buildPopularSitesList()
-                  : _isLoading
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const CircularProgressIndicator(),
-                            const SizedBox(height: 16),
-                            Text(_pageContent!, style: const TextStyle(fontSize: 14)),
-                          ],
-                        ),
-                      )
-                    : _contentType.startsWith('image/')
-                        ? Center(
-                            child: CachedNetworkImage(
-                              imageUrl: _encryptionEnabled 
-                                ? 'https://bridge.stormycloud.org/api/v1/browse'
-                                : 'https://bridge.stormycloud.org/api/v1/browse?url=$currentUrl',
-                              httpHeaders: _encryptionEnabled 
-                                ? {
-                                    'Content-Type': 'application/x-www-form-urlencoded',
-                                    'X-Session-Token': _encryption.generateChannelId(),
-                                    'X-Privacy-Mode': 'enabled',
-                                    'User-Agent': appUserAgent,
-                                  }
-                                : {'User-Agent': appUserAgent},
-                              placeholder: (context, url) => const CircularProgressIndicator(), 
-                              errorWidget: (context, url, error) => const Text('[Image failed to load]'),
-                            )
-                          )
-                        : HtmlWidget( 
-                            _pageContent!, 
-                            renderMode: RenderMode.listView, 
-                            customWidgetBuilder: (element) { 
-                              if (element.localName == 'img') { 
-                                final src = element.attributes['src']; 
-                                if (src != null) { 
-                                  if (src.startsWith('data:image')) { 
-                                    try { 
-                                      final parts = src.split(','); 
-                                      final imageBytes = base64Decode(parts[1]); 
-                                      return Image.memory(imageBytes); 
-                                    } catch (e) { 
-                                      return const Text('[Invalid Image Data]'); 
-                                    } 
-                                  } 
-                                  final currentUri = Uri.parse('http://$currentUrl'); 
-                                  final imageUrl = currentUri.resolve(src).toString(); 
-                                  final proxiedUrl = 'https://bridge.stormycloud.org/api/v1/browse?url=${imageUrl.replaceFirst(RegExp(r'^https?://'), '')}'; 
-                                  if (proxiedUrl.endsWith('.svg')) { 
-                                    return SvgPicture.network( 
-                                      proxiedUrl, 
-                                      colorFilter: ColorFilter.mode(svgColor, BlendMode.srcIn), 
-                                      placeholderBuilder: (context) => const CircularProgressIndicator(), 
-                                      headers: {'User-Agent': appUserAgent},
-                                    ); 
-                                  } else { 
-                                    return CachedNetworkImage( 
-                                      imageUrl: proxiedUrl, 
-                                      httpHeaders: {'User-Agent': appUserAgent},
-                                      placeholder: (context, url) => const CircularProgressIndicator(), 
-                                      errorWidget: (context, url, error) => const Text('[Image failed to load]'), 
-                                    ); 
-                                  } 
-                                } 
-                              } 
-                              return null; 
-                            }, 
-                            onTapUrl: (url) { 
-                              _loadPage(url); 
-                              return true; 
-                            }, 
-                            textStyle: const TextStyle(color: Colors.white), 
-                          ),
+                child: _buildPageContent(svgColor, currentUrl),
               ),
             ), 
           ),
@@ -452,24 +383,104 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
     );
   }
 
+  Widget _buildPageContent(Color svgColor, String currentUrl) {
+    if (_pageContent == null) {
+      return _buildPopularSitesList();
+    }
+    
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+
+    if (_contentType.startsWith('image/')) {
+      return Center(
+        child: CachedNetworkImage(
+          imageUrl: _encryptionEnabled 
+            ? 'https://bridge.stormycloud.org/api/v1/browse'
+            : 'https://bridge.stormycloud.org/api/v1/browse?url=$currentUrl',
+          httpHeaders: _encryptionEnabled 
+            ? {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Session-Token': _encryption.generateChannelId(),
+                'X-Privacy-Mode': 'enabled',
+                'User-Agent': appUserAgent,
+              }
+            : {'User-Agent': appUserAgent},
+          placeholder: (context, url) => const CircularProgressIndicator(), 
+          errorWidget: (context, url, error) => const Text('[Image failed to load]'),
+        )
+      );
+    }
+
+    return SingleChildScrollView(
+      child: HtmlWidget( 
+        _pageContent!, 
+        customWidgetBuilder: (element) { 
+          if (element.localName == 'img') { 
+            final src = element.attributes['src']; 
+            if (src != null) { 
+              if (src.startsWith('data:image')) { 
+                try { 
+                  final parts = src.split(','); 
+                  final imageBytes = base64Decode(parts[1]); 
+                  return Image.memory(imageBytes); 
+                } catch (e) { 
+                  return const Text('[Invalid Image Data]'); 
+                } 
+              } 
+              final currentUri = Uri.parse('http://$currentUrl'); 
+              final imageUrl = currentUri.resolve(src).toString(); 
+              final proxiedUrl = 'https://bridge.stormycloud.org/api/v1/browse?url=${imageUrl.replaceFirst(RegExp(r'^https?://'), '')}'; 
+              if (proxiedUrl.endsWith('.svg')) { 
+                return SvgPicture.network( 
+                  proxiedUrl, 
+                  colorFilter: ColorFilter.mode(svgColor, BlendMode.srcIn), 
+                  placeholderBuilder: (context) => const CircularProgressIndicator(), 
+                  headers: {'User-Agent': appUserAgent},
+                ); 
+              } else { 
+                return CachedNetworkImage( 
+                  imageUrl: proxiedUrl, 
+                  httpHeaders: {'User-Agent': appUserAgent},
+                  placeholder: (context, url) => const CircularProgressIndicator(), 
+                  errorWidget: (context, url, error) => const Text('[Image failed to load]'), 
+                ); 
+              } 
+            } 
+          } 
+          return null; 
+        }, 
+        onTapUrl: (url) { 
+          _loadPage(url); 
+          return true; 
+        }, 
+        textStyle: const TextStyle(color: Colors.white), 
+      ),
+    );
+  }
+
   Widget _buildPopularSitesList() {
-    return Column(
-      children: [
-        const SizedBox(height: 8),
-        Icon(Icons.language, size: 60, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
-        const SizedBox(height: 12),
-        Text(
-          _encryptionEnabled ? '🔒 Privacy Mode Active' : '🔓 Standard Mode',
-          style: TextStyle(fontSize: 14, color: _encryptionEnabled ? Colors.green : Colors.orange),
-        ),
-        const SizedBox(height: 20),
-        const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 32),
-          child: Text('Popular I2P Sites', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-        ),
-        const SizedBox(height: 12),
-        Expanded(
-          child: ListView.builder(
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          const SizedBox(height: 8),
+          Icon(Icons.language, size: 60, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
+          const SizedBox(height: 12),
+          Text(
+            _encryptionEnabled ? '🔒 Privacy Mode Active' : '🔓 Standard Mode',
+            style: TextStyle(fontSize: 14, color: _encryptionEnabled ? Colors.green : Colors.orange),
+          ),
+          const SizedBox(height: 20),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 32),
+            child: Text('Popular I2P Sites', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+          ),
+          const SizedBox(height: 12),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
             padding: const EdgeInsets.symmetric(horizontal: 16),
             itemCount: popularSites.length,
             itemBuilder: (context, index) {
@@ -498,28 +509,28 @@ class _BrowserPageState extends State<BrowserPage> with SingleTickerProviderStat
               );
             },
           ),
-        ),
-        Container(
-          margin: const EdgeInsets.all(12),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Row(
-            children: [
-              Icon(Icons.info_outline, size: 18, color: Theme.of(context).colorScheme.primary),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'Tap the lock icon in the address bar to toggle privacy mode',
-                  style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.primary),
+          Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.info_outline, size: 18, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Tap the lock icon in the address bar to toggle privacy mode',
+                    style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.primary),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
