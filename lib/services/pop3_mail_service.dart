@@ -12,6 +12,7 @@ import 'package:http/io_client.dart';
 import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'debug_service.dart';
 
 
 class EmailMessage {
@@ -144,7 +145,7 @@ class Pop3MailService with ChangeNotifier {
         // Compare with expected hash
         return publicKeyHashBase64 == expectedPublicKeyHash;
       } catch (e) {
-        print('Certificate validation error: $e');
+        DebugService.instance.logMail('Certificate validation error: $e');
         return false;
       }
     };
@@ -239,6 +240,7 @@ class Pop3MailService with ChangeNotifier {
 
   Future<bool> connect(String username, String password) async {
     try {
+      DebugService.instance.logMail('Attempting to connect with username: $username');
       _isLoading = true;
       _username = username;
       _lastError = '';

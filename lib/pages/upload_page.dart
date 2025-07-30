@@ -13,6 +13,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:crypto/crypto.dart';
 import '../assets/drop_logo.dart';
+import '../services/debug_service.dart';
 
 class UploadPage extends StatefulWidget {
   const UploadPage({super.key});
@@ -75,7 +76,7 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         // Compare with expected hash
         return publicKeyHashBase64 == expectedPublicKeyHash;
       } catch (e) {
-        print('Certificate validation error: $e');
+        DebugService.instance.logUpload('Certificate validation error: $e');
         return false;
       }
     };
@@ -104,6 +105,7 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
 
   Future<void> _uploadFile() async {
     if (_pickedFile == null) {
+      DebugService.instance.logUpload('Upload attempted but no file selected');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please select an image first'),
@@ -132,6 +134,8 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           );
           await Future.delayed(const Duration(seconds: 2));
         }
+        
+        DebugService.instance.logUpload('Uploading file: ${_pickedFile!.path} (attempt ${i + 1}/$maxRetries)');
         
         var request = http.MultipartRequest(
           'POST', 
@@ -170,6 +174,8 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         
         final responseBody = await streamedResponse.stream.bytesToString();
         final decodedBody = json.decode(responseBody);
+        
+        DebugService.instance.logUpload('Upload response: ${streamedResponse.statusCode} - ${responseBody.length} bytes');
 
         if (streamedResponse.statusCode == 200) {
           final rawUrl = decodedBody['url'];

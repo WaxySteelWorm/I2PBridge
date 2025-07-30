@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'dart:math';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/export.dart';
+import 'debug_service.dart';
 
 class EncryptionService {
   static final EncryptionService _instance = EncryptionService._internal();
@@ -82,7 +83,7 @@ class EncryptionService {
         'key': base64.encode(_sessionKey),
       };
     } catch (e) {
-      print('Encryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'Encryption error: $e');
       rethrow;
     }
   }
@@ -113,7 +114,7 @@ class EncryptionService {
       // Convert back to string
       return utf8.decode(decrypted);
     } catch (e) {
-      print('Decryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'Decryption error: $e');
       rethrow;
     }
   }
@@ -151,7 +152,7 @@ class EncryptionService {
         'iv': base64.encode(_mailIV),
       };
     } catch (e) {
-      print('Mail credential encryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'Mail credential encryption error: $e');
       rethrow;
     }
   }
@@ -203,7 +204,7 @@ class EncryptionService {
       
       return encrypted;
     } catch (e) {
-      print('Mail content encryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'Mail content encryption error: $e');
       rethrow;
     }
   }
@@ -259,7 +260,7 @@ class EncryptionService {
       
       return decrypted;
     } catch (e) {
-      print('Mail content decryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'Mail content decryption error: $e');
       rethrow;
     }
   }
@@ -300,7 +301,7 @@ class EncryptionService {
         'to': to, // Keep recipient in plaintext for server routing
       };
     } catch (e) {
-      print('Outgoing email encryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'Outgoing email encryption error: $e');
       rethrow;
     }
   }
@@ -331,7 +332,7 @@ class EncryptionService {
       final data = json.decode(decrypted);
       return data['url'];
     } catch (e) {
-      print('URL decryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'URL decryption error: $e');
       return '';
     }
   }
@@ -357,7 +358,7 @@ class EncryptionService {
       final data = json.decode(decrypted);
       return data['message'];
     } catch (e) {
-      print('IRC decryption error: $e');
+      DebugService.instance.log('ENCRYPTION', 'IRC decryption error: $e');
       return '';
     }
   }
