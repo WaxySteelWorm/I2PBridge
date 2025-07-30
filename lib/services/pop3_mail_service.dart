@@ -244,7 +244,6 @@ class Pop3MailService with ChangeNotifier {
       _isLoading = true;
       _username = username;
       _lastError = '';
-      _updateStatus('Connecting securely...');
 
       _encryptedCredentials = _encryptCredentials(username, password);
 
