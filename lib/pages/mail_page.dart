@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../services/pop3_mail_service.dart';
 import 'compose_mail_page.dart';
 import 'read_mail_page.dart';
+import 'create_account_page.dart';
 
 class MailPage extends StatefulWidget {
   const MailPage({super.key});
@@ -199,11 +200,32 @@ class _MailPageState extends State<MailPage> {
           
           _buildStatusMessage(mailService),
           
-          const SizedBox(height: 16),
-          const Text(
-            'Need an account? Create one at:\nhttp://127.0.0.1:7657/susimail/',
-            textAlign: TextAlign.center,
-            style: TextStyle(fontSize: 12, color: Colors.grey),
+          const SizedBox(height: 24),
+          Row(
+            children: [
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => const CreateAccountPage(),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.person_add, size: 18),
+                  label: const Text('Create I2P Account'),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    backgroundColor: Colors.blue.withOpacity(0.1),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      side: BorderSide(color: Colors.blue.withOpacity(0.3)),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -410,14 +432,7 @@ class _MailPageState extends State<MailPage> {
   Widget _buildMessageList(Pop3MailService mailService) {
     if (mailService.isLoading && mailService.messages.isEmpty) {
       return const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Loading encrypted messages...'),
-          ],
-        ),
+        child: CircularProgressIndicator(),
       );
     }
     
