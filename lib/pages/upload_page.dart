@@ -94,12 +94,40 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
   }
 
   Future<void> _pickFile() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.image);
-    if (result != null) {
+    try {
       setState(() {
-        _pickedFile = File(result.files.single.path!);
-        _successfulUrl = null;
+        _isLoading = true; // Show loading state during file selection
       });
+      
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      
+      if (result != null && result.files.single.path != null) {
+        setState(() {
+          _pickedFile = File(result.files.single.path!);
+          _successfulUrl = null;
+          _isLoading = false;
+        });
+        
+        DebugService.instance.logUpload('File selected: ${result.files.single.name} (${result.files.single.size} bytes)');
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      DebugService.instance.logUpload('File selection error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('File selection failed: ${e.toString()}'),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 
@@ -260,9 +288,9 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Logo
+              const SizedBox(height: 16), 
               SizedBox(
-                height: 80,
+                height: 100,
                 child: SvgPicture.string(dropLogoSvg),
               ),
               const SizedBox(height: 32),
