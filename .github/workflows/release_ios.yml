@@ -34,20 +34,21 @@ jobs:
           
       - name: Install signing assets
         run: |
-          # Clean up any existing build keychain first
-          security delete-keychain build.keychain || true
+          # More thorough keychain cleanup
+          security delete-keychain build.keychain 2>/dev/null || true
+          rm -f ~/Library/Keychains/build.keychain* 2>/dev/null || true
           
-          # Create fresh keychain
-          security create-keychain -p password build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p password build.keychain
-          security set-keychain-settings -t 3600 -u build.keychain
+          # Create fresh keychain with full path
+          security create-keychain -p password ~/Library/Keychains/build.keychain
+          security default-keychain -s ~/Library/Keychains/build.keychain
+          security unlock-keychain -p password ~/Library/Keychains/build.keychain
+          security set-keychain-settings -t 3600 -u ~/Library/Keychains/build.keychain
           
           # Import certificate
-          security import ios/dist_cert.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security import ios/dist_cert.p12 -k ~/Library/Keychains/build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -A
           
           # Set partition list to avoid codesign prompts
-          security set-key-partition-list -S apple-tool:,apple: -s -k password build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k password ~/Library/Keychains/build.keychain
           
           # Install provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
