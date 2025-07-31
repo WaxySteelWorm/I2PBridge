@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+
+server.js
+ecosystem.cofig.js
+CLAUDE.md
