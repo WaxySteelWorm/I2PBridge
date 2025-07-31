@@ -1,0 +1,53 @@
+name: Release iOS to TestFlight
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-ios:
+    runs-on: [self-hosted, macOS]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Install dependencies
+        run: |
+          cd ios
+          gem install bundler
+          bundle install || bundle init && bundle install
+          bundle add fastlane
+
+      - name: Decode signing assets
+        run: |
+          echo "$IOS_CERTIFICATE_P12" | base64 --decode > ios/dist_cert.p12
+          echo "$IOS_PROVISIONING_PROFILE" | base64 --decode > ios/profile.mobileprovision
+        env:
+          IOS_CERTIFICATE_P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+
+      - name: Install signing assets
+        run: |
+          security create-keychain -p password build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p password build.keychain
+          security import ios/dist_cert.p12 -k build.keychain -T /usr/bin/codesign
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp ios/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+        env:
+          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+
+      - name: Build IPA and upload to TestFlight
+        run: |
+          cd ios
+          bundle exec fastlane release
+        env:
+          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
+          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
+          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
