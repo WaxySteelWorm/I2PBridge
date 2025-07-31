@@ -34,21 +34,26 @@ jobs:
           
       - name: Install signing assets
         run: |
-          # More thorough keychain cleanup
-          security delete-keychain build.keychain 2>/dev/null || true
-          rm -f ~/Library/Keychains/build.keychain* 2>/dev/null || true
+          # Kill any processes that might be using the keychain
+          pkill -f "SecurityAgent" || true
+          pkill -f "securityd" || true
+          sleep 2
           
-          # Create fresh keychain with full path
-          security create-keychain -p password ~/Library/Keychains/build.keychain
-          security default-keychain -s ~/Library/Keychains/build.keychain
-          security unlock-keychain -p password ~/Library/Keychains/build.keychain
-          security set-keychain-settings -t 3600 -u ~/Library/Keychains/build.keychain
+          # Force remove existing keychain files
+          security list-keychains -d user | grep -q "build.keychain" && security delete-keychain build.keychain || true
+          rm -rf ~/Library/Keychains/build.keychain* || true
+          
+          # Create fresh keychain
+          security create-keychain -p password build.keychain
+          security list-keychains -s build.keychain $(security list-keychains -d user | sed s/\"//g)
+          security unlock-keychain -p password build.keychain
+          security set-keychain-settings -t 3600 -u build.keychain
           
           # Import certificate
-          security import ios/dist_cert.p12 -k ~/Library/Keychains/build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -A
+          security import ios/dist_cert.p12 -k build.keychain -P "$IOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -A
           
           # Set partition list to avoid codesign prompts
-          security set-key-partition-list -S apple-tool:,apple: -s -k password ~/Library/Keychains/build.keychain
+          security set-key-partition-list -S apple-tool:,apple: -s -k password build.keychain
           
           # Install provisioning profile
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
@@ -64,3 +69,9 @@ jobs:
           APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
           APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
           APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+          
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          security delete-keychain build.keychain || true
+          rm -rf ~/Library/Keychains/build.keychain* || true
