@@ -7,7 +7,7 @@ platform :ios do
     match(
       type: "appstore",
       app_identifier: "org.stormycloud.i2pbridge",
-      git_url: "git@github.com:WaxySteelWorm/ios-certificates.git",
+      git_url: "https://github.com/WaxySteelWorm/ios-certificates-v2.git",
       readonly: true
     )
     
