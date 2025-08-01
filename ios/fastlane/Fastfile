@@ -25,7 +25,7 @@ platform :ios do
     # Upload to TestFlight
     upload_to_testflight(
       skip_waiting_for_build_processing: true,
-      apple_id: "YOUR_APP_ID" # Replace with your actual App Store Connect App ID
+      apple_id: "6749371313" # Replace with your actual App Store Connect App ID
     )
   end
 end
