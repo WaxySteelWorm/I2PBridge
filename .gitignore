@@ -76,4 +76,4 @@ fastlane/Matchfile
 
 # Temporary files
 *.swp
-*~
+*~.github/workflows/release_ios.yml
