@@ -7,8 +7,7 @@ platform :ios do
     match(
       type: "appstore",
       app_identifier: "org.stormycloud.i2pbridge",
-      readonly: true,
-      skip_certificate_verification: true
+      readonly: true
     )
     
     # Build your app
