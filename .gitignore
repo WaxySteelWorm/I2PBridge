@@ -50,11 +50,12 @@ ecosystem.cofig.js
 CLAUDE.md
  
 # Fastlane
-fastlane/report.xml
-fastlane/Preview.html
-fastlane/screenshots/**/*.png
-fastlane/test_output
-fastlane/README.md
+ios/fastlane/report.xml
+ios/fastlane/Preview.html
+ios/fastlane/screenshots/**/*.png
+ios/fastlane/test_output
+ios/fastlane/README.md
+ios/fastlane/Matchfile
 
 # Match - IMPORTANT: Never commit the Matchfile if it contains tokens
 fastlane/Matchfile
