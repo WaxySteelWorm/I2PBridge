@@ -1,52 +1,35 @@
-name: Release iOS to TestFlight
+name: iOS Release
+
 on:
   push:
     tags:
       - 'v*'
+
 jobs:
-  build-ios:
-    runs-on: [self-hosted, macOS]
+  build:
+    runs-on: self-hosted
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
+    
+    - name: Install CocoaPods
+      run: |
+        gem install cocoapods
+        
+    - name: Install pods
+      working-directory: ./ios
+      run: pod install
       
-      - name: Set up Ruby environment
-        run: |
-          ruby --version
-          gem --version
-          which ruby
-          
-      - name: Install dependencies
-        run: |
-          cd ios
-          gem install bundler --user-install
-          bundle install || (bundle init && bundle install)
-          bundle add fastlane
-          
-      - name: Decode signing assets
-        run: |
-          echo "$IOS_CERTIFICATE_P12" | base64 --decode > ios/dist_cert.p12
-          echo "$IOS_PROVISIONING_PROFILE" | base64 --decode > ios/profile.mobileprovision
-        env:
-          IOS_CERTIFICATE_P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
-          IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
-          
-      - name: Install signing assets
-        run: |
-          security create-keychain -p password build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p password build.keychain
-          security import ios/dist_cert.p12 -k build.keychain -T /usr/bin/codesign
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp ios/profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
-        env:
-          IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
-          
-      - name: Build IPA and upload to TestFlight
-        run: |
-          cd ios
-          bundle exec fastlane release
-        env:
-          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          APP_STORE_CONNECT_API_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_API_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}
+    - name: Unlock keychain
+      run: |
+        security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" ~/Library/Keychains/login.keychain-db
+        security set-keychain-settings -lut 21600 ~/Library/Keychains/login.keychain-db
+        
+    - name: Build and upload to TestFlight
+      working-directory: ./ios
+      env:
+        MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.APPSTORE_CONNECT_API_KEY }}
+      run: |
+        bundle install
+        bundle exec fastlane release
