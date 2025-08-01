@@ -1,4 +1,4 @@
-name: Release iOS App
+name: Release iOS App v1
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
 
 jobs:
   release_ios:
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, macOS, ARM64]
     
     steps:
     - name: Checkout code
@@ -19,6 +19,13 @@ jobs:
         echo "${{ secrets.MATCH_GIT_PRIVATE_KEY }}" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+    - name: Install Pods
+      run: |
+        cd ios
+        rm -rf Pods
+        rm -f Podfile.lock  
+        pod install
 
     - name: Run Fastlane Build
       env:
