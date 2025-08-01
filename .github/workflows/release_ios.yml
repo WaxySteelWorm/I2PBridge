@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-deploy:
-    runs-on: [self-hosted, macOS]  # Ensure this matches your self-hosted Mac mini runner labels (e.g., self-hosted and macOS)
+    runs-on: Dustins-Mac-mini  # Use the exact runner name to ensure it runs on your self-hosted Mac mini (adjust if the label is different)
 
     steps:
       - name: Checkout repository
@@ -18,10 +18,9 @@ jobs:
           gem install bundler
           bundle install
 
-      - name: Set up Node.js (if needed for Flutter or other dependencies)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'  # Adjust if your project uses a specific Node version
+      - name: Install Flutter dependencies
+        run: |
+          flutter pub get
 
       - name: Install CocoaPods
         run: |
@@ -44,6 +43,9 @@ jobs:
             --team_id "GZXYAV4ZG2" \
             --app_identifier "org.stormycloud.i2pbridge" \
             --readonly false  # Set to true if you don't need to create new certs/profiles
+
+      - name: Build Flutter iOS
+        run: flutter build ios --release --no-codesign
 
       - name: Build IPA
         env:
