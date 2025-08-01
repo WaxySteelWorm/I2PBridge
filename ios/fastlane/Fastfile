@@ -4,12 +4,12 @@ platform :ios do
   desc "Push a new release build to TestFlight"
   lane :release do
     # Ensure we have the latest certificates
-    match(
-      type: "appstore",
-      app_identifier: "org.stormycloud.i2pbridge",
-      readonly: true
-    )
-    
+match(
+  type: "appstore",
+  app_identifier: "org.stormycloud.i2pbridge",
+  git_url: "git@github.com:WaxySteelWorm/ios-certificates.git",
+  readonly: true
+)    
     # Build your app
     build_app(
       workspace: "Runner.xcworkspace",
