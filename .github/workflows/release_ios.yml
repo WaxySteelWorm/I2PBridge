@@ -1,4 +1,4 @@
-name: iOS Release
+name: Release iOS App to TestFlight
 
 on:
   push:
@@ -6,38 +6,115 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    runs-on: [self-hosted, macOS]
+  release_ios:
+    runs-on: self-hosted
     
     steps:
-    - uses: actions/checkout@v3
-    
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.0'
+        bundler-cache: true
+
     - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: 'stable'
+        channel: 'stable'
+
+    - name: Create temporary keychain
       run: |
-        # Run flutter pub get to generate necessary files
-        flutter pub get
+        # Create a temporary keychain for this build
+        security create-keychain -p "temp123" temp-build.keychain
+        security default-keychain -s temp-build.keychain
+        security unlock-keychain -p "temp123" temp-build.keychain
+        security set-keychain-settings -t 3600 -l temp-build.keychain
+
+    - name: Install Apple WWDR certificates
+      run: |
+        # Download and install WWDR certificates
+        curl -o AppleWWDRCA.cer "https://developer.apple.com/certificationauthority/AppleWWDRCA.cer"
+        curl -o AppleWWDRCAG3.cer "https://www.apple.com/certificateauthority/AppleWWDRCAG3.cer"
+        curl -o AppleWWDRCAG6.cer "https://www.apple.com/certificateauthority/AppleWWDRCAG6.cer"
         
-    - name: Set up SSH for Match
+        security import AppleWWDRCA.cer -k temp-build.keychain -T /usr/bin/codesign
+        security import AppleWWDRCAG3.cer -k temp-build.keychain -T /usr/bin/codesign  
+        security import AppleWWDRCAG6.cer -k temp-build.keychain -T /usr/bin/codesign
+        
+        rm *.cer
+
+    - name: Import certificates and provisioning profile
       env:
-        MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
+        IOS_DISTRIBUTION_CERTIFICATE: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE }}
+        IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
+        IOS_PROVISIONING_PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
       run: |
-        mkdir -p ~/.ssh
-        echo "$MATCH_GIT_PRIVATE_KEY" > ~/.ssh/id_rsa
-        chmod 600 ~/.ssh/id_rsa
-        ssh-keyscan github.com >> ~/.ssh/known_hosts
+        # Decode and import distribution certificate
+        echo $IOS_DISTRIBUTION_CERTIFICATE | base64 --decode > distribution.p12
+        security import distribution.p12 -k temp-build.keychain -P $IOS_DISTRIBUTION_CERTIFICATE_PASSWORD -T /usr/bin/codesign
         
-    - name: Install iOS dependencies
-      working-directory: ./ios
+        # Install provisioning profile
+        echo $IOS_PROVISIONING_PROFILE | base64 --decode > profile.mobileprovision
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+        cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+        
+        # Set partition list for codesign access
+        security set-key-partition-list -S apple-tool:,apple: -s -k "temp123" temp-build.keychain
+        
+        # Verify certificates are installed
+        security find-identity -v -p codesigning temp-build.keychain
+
+    - name: Clean and reinstall pods
       run: |
-        bundle install
+        cd ios
+        rm -rf Pods
+        rm -f Podfile.lock
         pod install
+        cd ..
+
+    - name: Get Flutter dependencies
+      run: flutter pub get
+
+    - name: Build iOS app
+      run: |
+        flutter build ios --release --no-codesign
         
-    - name: Build and upload to TestFlight
-      working-directory: ./ios
+    - name: Create IPA with manual code signing
+      run: |
+        # Find the distribution certificate
+        CERT_NAME=$(security find-identity -v -p codesigning temp-build.keychain | grep "iPhone Distribution" | head -1 | grep -o '"[^"]*"' | sed 's/"//g')
+        echo "Using certificate: $CERT_NAME"
+        
+        # Find provisioning profile UUID
+        PROFILE_UUID=$(grep -A1 -a "UUID" ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision | grep string | sed 's/.*<string>\(.*\)<\/string>.*/\1/')
+        echo "Using provisioning profile: $PROFILE_UUID"
+        
+        # Code sign the app
+        codesign --force --sign "$CERT_NAME" --entitlements ios/Runner/Runner.entitlements build/ios/Release-iphoneos/Runner.app
+        
+        # Create IPA
+        mkdir -p build/ios/ipa/Payload
+        cp -r build/ios/Release-iphoneos/Runner.app build/ios/ipa/Payload/
+        cd build/ios/ipa
+        zip -r ../Runner.ipa Payload/
+        cd ../../..
+
+    - name: Upload to TestFlight
       env:
-        MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
         FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
-        MATCH_GIT_URL: "git@github.com:WaxySteelWorm/ios-certificates.git"
       run: |
-        bundle exec fastlane release
+        bundle exec fastlane pilot upload \
+          --ipa build/ios/Runner.ipa \
+          --skip_waiting_for_build_processing \
+          --team_id GZXYAV4ZG2
+
+    - name: Cleanup
+      if: always()
+      run: |
+        security delete-keychain temp-build.keychain || true
+        rm -f distribution.p12 profile.mobileprovision
+        security default-keychain -s login.keychain
