@@ -7,11 +7,20 @@ on:
 
 jobs:
   build:
-    runs-on: [self-hosted, macOS]  # This ensures it runs on your Mac
+    runs-on: [self-hosted, macOS]
     
     steps:
     - uses: actions/checkout@v3
     
+    - name: Debug - Check file structure
+      run: |
+        echo "Current directory:"
+        pwd
+        echo "Contents:"
+        ls -la
+        echo "iOS directory contents:"
+        ls -la ios/
+        
     - name: Set up SSH for Match
       env:
         MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
@@ -24,6 +33,9 @@ jobs:
     - name: Install dependencies
       working-directory: ./ios
       run: |
+        echo "In iOS directory:"
+        pwd
+        ls -la
         bundle install
         pod install
         
