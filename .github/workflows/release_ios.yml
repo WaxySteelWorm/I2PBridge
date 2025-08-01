@@ -19,7 +19,15 @@ jobs:
         echo "${{ secrets.MATCH_GIT_PRIVATE_KEY }}" > ~/.ssh/id_rsa
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan github.com >> ~/.ssh/known_hosts
-
+        
+    - name: Setup keychain for codesigning
+      run: |
+        # Unlock keychain and set permissions for codesigning
+        security unlock-keychain -p "" ~/Library/Keychains/login.keychain
+        security set-key-partition-list -S apple-tool:,apple: -s -k "" ~/Library/Keychains/login.keychain
+        # Set keychain timeout to prevent locking during build
+        security set-keychain-settings -t 3600 ~/Library/Keychains/login.keychain
+        
     - name: Setup Flutter and install pods
       run: |
         flutter pub get
