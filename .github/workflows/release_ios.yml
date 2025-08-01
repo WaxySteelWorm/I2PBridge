@@ -12,24 +12,27 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     
-    - name: Install CocoaPods
+    - name: Set up SSH for Match
+      env:
+        MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
       run: |
-        gem install cocoapods
+        mkdir -p ~/.ssh
+        echo "$MATCH_GIT_PRIVATE_KEY" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
         
-    - name: Install pods
+    - name: Install dependencies
       working-directory: ./ios
-      run: pod install
-      
-    - name: Unlock keychain
       run: |
-        security unlock-keychain -p "${{ secrets.KEYCHAIN_PASSWORD }}" ~/Library/Keychains/login.keychain-db
-        security set-keychain-settings -lut 21600 ~/Library/Keychains/login.keychain-db
+        bundle install
+        pod install
         
     - name: Build and upload to TestFlight
       working-directory: ./ios
       env:
         MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.APPSTORE_CONNECT_API_KEY }}
+        FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+        MATCH_GIT_URL: "git@github.com:WaxySteelWorm/ios-certificates.git"
       run: |
-        bundle install
         bundle exec fastlane release
