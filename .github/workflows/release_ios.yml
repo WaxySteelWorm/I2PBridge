@@ -1,4 +1,4 @@
-name: Release iOS App v1
+name: Release iOS App v2
 
 on:
   push:
@@ -20,8 +20,9 @@ jobs:
         chmod 600 ~/.ssh/id_rsa
         ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-    - name: Install Pods
+    - name: Setup Flutter and install pods
       run: |
+        flutter pub get
         cd ios
         rm -rf Pods
         rm -f Podfile.lock  
