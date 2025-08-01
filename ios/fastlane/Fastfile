@@ -1,26 +1,31 @@
 default_platform(:ios)
 
 platform :ios do
-  desc "Build and upload to TestFlight"
+  desc "Push a new release build to TestFlight"
   lane :release do
+    # Ensure we have the latest certificates
     match(
       type: "appstore",
+      app_identifier: "org.stormycloud.i2pbridge",
       readonly: true
     )
-
-    build_ios_app(
+    
+    # Build your app
+    build_app(
       workspace: "Runner.xcworkspace",
       scheme: "Runner",
       export_method: "app-store",
       export_options: {
         provisioningProfiles: {
-          "org.stormycloud.i2pbridge" => "i2pbridge-appstore-profile"
+          "org.stormycloud.i2pbridge" => "match AppStore org.stormycloud.i2pbridge"
         }
       }
     )
-
+    
+    # Upload to TestFlight
     upload_to_testflight(
-      api_key: app_store_connect_api_key
+      skip_waiting_for_build_processing: true,
+      apple_id: "YOUR_APP_ID" # Replace with your actual App Store Connect App ID
     )
   end
 end
