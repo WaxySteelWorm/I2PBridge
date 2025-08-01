@@ -1,94 +1,42 @@
-name: iOS Release Workflow
+name: Release iOS App
 
 on:
   push:
     tags:
-      - 'v*.*.*'  # Trigger on version tags like v1.0.0
+      - 'v*'
 
 jobs:
-  build-and-deploy:
-    runs-on: [self-hosted, macOS]  # Ensure this matches your self-hosted Mac mini runner labels (e.g., self-hosted and macOS)
-
+  release_ios:
+    runs-on: self-hosted
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-      - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.0'  # Use a compatible Ruby version for Fastlane
-          bundler-cache: true
+    - name: Set up Ruby
+      uses: ruby/setup-ruby@v1
+      with:
+        ruby-version: '3.0'
+        bundler-cache: true
 
-      - name: Install Bundler dependencies
-        run: |
-          gem install bundler
-          bundle install
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: 'stable'
+        channel: 'stable'
 
-      - name: Set up Node.js (if needed for Flutter or other dependencies)
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'  # Adjust if your project uses a specific Node version
+    - name: Configure Git for Match
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.MATCH_GIT_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
 
-      - name: Install CocoaPods
-        run: |
-          sudo gem install cocoapods
-          cd ios
-          pod install
-          cd ..
-
-      - name: Install certificates with Fastlane Match
-        env:
-          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
-          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}  # Assuming you have a secret for the Match repo URL
-          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}  # If needed for private repo auth
-          APP_STORE_CONNECT_TEAM_ID: 'GZXYAV4ZG2'  # Your Team ID
-          BUNDLE_ID: 'org.stormycloud.i2pbridge'  # Your Bundle ID
-        run: |
-          bundle exec fastlane match appstore \
-            --git_url "$MATCH_GIT_URL" \
-            --password "$MATCH_PASSWORD" \
-            --team_id "GZXYAV4ZG2" \
-            --app_identifier "org.stormycloud.i2pbridge" \
-            --readonly false  # Set to true if you don't need to create new certs/profiles
-
-      - name: Build IPA
-        env:
-          APP_STORE_CONNECT_TEAM_ID: 'GZXYAV4ZG2'
-          BUNDLE_ID: 'org.stormycloud.i2pbridge'
-          APP_ID: '6749371313'  # Your App ID from App Store Connect
-        run: |
-          xcodebuild clean archive \
-            -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -sdk iphoneos \
-            -configuration Release \
-            -archivePath build/Runner.xcarchive \
-            -allowProvisioningUpdates \
-            PROVISIONING_PROFILE_SPECIFIER="match AppStore org.stormycloud.i2pbridge"
-          
-          xcodebuild -exportArchive \
-            -archivePath build/Runner.xcarchive \
-            -exportOptionsPlist ios/exportOptions.plist \
-            -exportPath build/Runner.ipa \
-            -allowProvisioningUpdates
-
-      - name: Upload to TestFlight
-        env:
-          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
-          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
-          APP_STORE_CONNECT_API_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_API_KEY_CONTENT }}  # Base64 encoded private key
-          APP_ID: '6749371313'
-        run: |
-          # Assuming you have Fastlane set up for pilot (TestFlight upload)
-          bundle exec fastlane pilot upload \
-            --ipa "build/Runner.ipa" \
-            --app_identifier "org.stormycloud.i2pbridge" \
-            --apple_id "$APP_ID" \
-            --team_id "GZXYAV4ZG2" \
-            --skip_submission false  # Set to true if you don't want auto-submission for review
-
-      - name: Cleanup
-        if: always()
-        run: |
-          rm -rf build/
-          # Add any other cleanup if needed
+    - name: Run Match and Build
+      env:
+        MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+      run: |
+        cd ios
+        bundle exec fastlane release
