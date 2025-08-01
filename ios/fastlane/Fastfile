@@ -4,13 +4,14 @@ platform :ios do
   desc "Push a new release build to TestFlight"
   lane :release do
     # Ensure we have the latest certificates
-match(
-  type: "appstore",
-  app_identifier: "org.stormycloud.i2pbridge",
-  git_url: "git@github.com:WaxySteelWorm/ios-certificates.git",
-  readonly: true
-)    
-    # Build your app
+    match(
+      type: "appstore",
+      app_identifier: "org.stormycloud.i2pbridge",
+      git_url: "git@github.com:WaxySteelWorm/ios-certificates.git",
+      readonly: true
+    )
+    
+    # Build your app with specific codesigning settings
     build_app(
       workspace: "Runner.xcworkspace",
       scheme: "Runner",
@@ -19,13 +20,17 @@ match(
         provisioningProfiles: {
           "org.stormycloud.i2pbridge" => "match AppStore org.stormycloud.i2pbridge"
         }
-      }
+      },
+      codesigning_identity: "Apple Distribution: StormyCloud Inc (GZXYAV4ZG2)",
+      skip_build_archive: false,
+      archive_path: "./Runner.xcarchive",
+      build_path: "./build"
     )
     
     # Upload to TestFlight
     upload_to_testflight(
       skip_waiting_for_build_processing: true,
-      apple_id: "6749371313" # Replace with your actual App Store Connect App ID
+      apple_id: "6749371313"
     )
   end
 end
