@@ -44,7 +44,35 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-
+# MISC
 server.js
 ecosystem.cofig.js
 CLAUDE.md
+ 
+# Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+fastlane/README.md
+
+# Match - IMPORTANT: Never commit the Matchfile if it contains tokens
+fastlane/Matchfile
+
+# Environment files
+.env
+.env.*
+
+# Provisioning profiles (Match handles these)
+*.mobileprovision
+
+# Certificates
+*.p12
+*.cer
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.swp
+*~
