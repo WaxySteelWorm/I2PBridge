@@ -18,6 +18,7 @@ jobs:
         MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
         FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+        MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
       run: |
         export PATH="/opt/homebrew/bin:$PATH"
         cd ios
@@ -33,5 +34,5 @@ jobs:
         ssh-keyscan github.com >> ~/.ssh/known_hosts
         cd ios
         bundle exec fastlane release
-      env:
-        MATCH_GIT_PRIVATE_KEY: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
+
+        
