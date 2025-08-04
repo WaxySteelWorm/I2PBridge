@@ -13,6 +13,7 @@ import 'package:http_parser/http_parser.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:crypto/crypto.dart';
 import '../assets/drop_logo.dart';
+import '../services/debug_service.dart';
 
 class UploadPage extends StatefulWidget {
   const UploadPage({super.key});
@@ -75,7 +76,7 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         // Compare with expected hash
         return publicKeyHashBase64 == expectedPublicKeyHash;
       } catch (e) {
-        print('Certificate validation error: $e');
+        DebugService.instance.logUpload('Certificate validation error: $e');
         return false;
       }
     };
@@ -93,17 +94,46 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
   }
 
   Future<void> _pickFile() async {
-    FilePickerResult? result = await FilePicker.platform.pickFiles(type: FileType.image);
-    if (result != null) {
+    try {
       setState(() {
-        _pickedFile = File(result.files.single.path!);
-        _successfulUrl = null;
+        _isLoading = true; // Show loading state during file selection
       });
+      
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.image,
+        allowMultiple: false,
+      );
+      
+      if (result != null && result.files.single.path != null) {
+        setState(() {
+          _pickedFile = File(result.files.single.path!);
+          _successfulUrl = null;
+          _isLoading = false;
+        });
+        
+        DebugService.instance.logUpload('File selected: ${result.files.single.name} (${result.files.single.size} bytes)');
+      } else {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+      });
+      DebugService.instance.logUpload('File selection error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('File selection failed: ${e.toString()}'),
+          backgroundColor: Colors.orange,
+        ),
+      );
     }
   }
 
   Future<void> _uploadFile() async {
     if (_pickedFile == null) {
+      DebugService.instance.logUpload('Upload attempted but no file selected');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Please select an image first'),
@@ -132,6 +162,8 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           );
           await Future.delayed(const Duration(seconds: 2));
         }
+        
+        DebugService.instance.logUpload('Uploading file: ${_pickedFile!.path} (attempt ${i + 1}/$maxRetries)');
         
         var request = http.MultipartRequest(
           'POST', 
@@ -170,6 +202,8 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         
         final responseBody = await streamedResponse.stream.bytesToString();
         final decodedBody = json.decode(responseBody);
+        
+        DebugService.instance.logUpload('Upload response: ${streamedResponse.statusCode} - ${responseBody.length} bytes');
 
         if (streamedResponse.statusCode == 200) {
           final rawUrl = decodedBody['url'];
@@ -254,9 +288,9 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Logo
+              const SizedBox(height: 16), 
               SizedBox(
-                height: 80,
+                height: 100,
                 child: SvgPicture.string(dropLogoSvg),
               ),
               const SizedBox(height: 32),

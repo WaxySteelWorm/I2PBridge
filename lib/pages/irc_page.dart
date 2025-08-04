@@ -293,7 +293,6 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
 
   Widget _buildUserListDrawer(BuildContext context, IrcService ircService) {
     final userList = ircService.currentUserList;
-    userList.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     return Drawer(
       child: Column(

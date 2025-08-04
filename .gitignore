@@ -44,6 +44,9 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
+server.js
+ecosystem.config.js
+=======
 # MISC
 server.js
 ecosystem.cofig.js
@@ -77,3 +80,4 @@ fastlane/Matchfile
 # Temporary files
 *.swp
 *~.github/workflows/release_ios.yml
+

@@ -6,7 +6,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
 import 'services/irc_service.dart';
 import 'services/pop3_mail_service.dart';  // Add this import
-import 'pages/browser_page.dart';
+import 'services/debug_service.dart';
+import 'pages/enhanced_browser_page.dart';  // Changed from browser_page.dart
 import 'pages/upload_page.dart';
 import 'pages/irc_page.dart';
 import 'pages/mail_page.dart';
@@ -14,7 +15,12 @@ import 'pages/settings_page.dart';
 import 'theme.dart';
 import 'assets/stormycloud_logo.dart';
 
-void main() {
+void main(List<String> args) {
+  // Initialize debug service with command line arguments
+  DebugService.instance.initialize(args);
+  
+  // Always show app startup message
+  DebugService.instance.forceLog('🚀 I2P Bridge starting...');
   runApp(
     MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
       providers: [
@@ -50,6 +56,16 @@ class MainScaffold extends StatefulWidget {
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    // Check server debug status when app starts
+    DebugService.instance.checkServerDebugStatus().then((_) {
+      // Rebuild UI if server debug mode was detected
+      if (mounted) setState(() {});
+    });
+  }
+
   static const List<String> _moduleTitles = <String>[
     'HTTP Browser',
     'IRC Chat',
@@ -58,7 +74,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   ];
 
   final List<Widget> _pages = const [
-    BrowserPage(),
+    EnhancedBrowserPage(),  // Changed from BrowserPage()
     IrcPage(),
     MailPage(),
     UploadPage(),
@@ -87,9 +103,44 @@ class _MainScaffoldState extends State<MainScaffold> {
           ),
         ],
       ),
-      body: IndexedStack(
-        index: _selectedIndex,
-        children: _pages,
+      body: Column(
+        children: [
+          // Server debug banner
+          if (DebugService.instance.serverDebugMode)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+              color: Colors.orange.shade100,
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.bug_report,
+                    size: 16,
+                    color: Colors.orange.shade800,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Server debug mode active - detailed logging enabled on server',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.orange.shade800,
+                      ),
+                      
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          // Main content
+          Expanded(
+            child: IndexedStack(
+              index: _selectedIndex,
+              children: _pages,
+            ),
+          ),
+        ],
       ),
       bottomNavigationBar: BottomNavigationBar(
         items: const <BottomNavigationBarItem>[

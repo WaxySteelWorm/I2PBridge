@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/export.dart';
 import 'package:crypto/crypto.dart';
+import 'debug_service.dart';
 
 class ParsedMessage {
   final String sender;
@@ -63,7 +64,9 @@ class IrcService with ChangeNotifier {
   String _nickServPassword = '';
   String _lastChannel = '';
   Timer? _reconnectTimer;
+  Timer? _registrationTimer;
   bool _manualDisconnect = false;
+  DateTime? _connectionTime;
   
   bool _hideJoinQuit = false;
 
@@ -97,7 +100,7 @@ class IrcService with ChangeNotifier {
         // Compare with expected hash
         return publicKeyHashBase64 == expectedPublicKeyHash;
       } catch (e) {
-        print('Certificate validation error: $e');
+        DebugService.instance.logIrc('Certificate validation error: $e');
         return false;
       }
     };
@@ -124,7 +127,7 @@ class IrcService with ChangeNotifier {
       
       return base64.encode(encrypted);
     } catch (e) {
-      print('Encryption error: $e');
+      DebugService.instance.logIrc('Encryption error: $e');
       return message;
     }
   }
@@ -147,7 +150,7 @@ class IrcService with ChangeNotifier {
       
       return utf8.decode(decrypted);
     } catch (e) {
-      print('Decryption error: $e');
+      DebugService.instance.logIrc('Decryption error: $e');
       return '[Decryption Error]';
     }
   }
@@ -202,8 +205,17 @@ class IrcService with ChangeNotifier {
               );
               
               // Now send IRC registration
+              _addMessage(to: 'Status', sender: 'Status', content: 'Sending registration commands...');
               _sendEncryptedMessage('NICK $_nickname');
               _sendEncryptedMessage('USER $_nickname 0 * :I2P Bridge User');
+              _addMessage(to: 'Status', sender: 'Status', content: 'Registration commands sent, waiting for server response...');
+              
+              // Start registration timeout
+              _registrationTimer = Timer(const Duration(seconds: 30), () {
+                _addMessage(to: 'Status', sender: 'Error', content: 'IRC server registration timeout - no response from server');
+                disconnect();
+              });
+              
               return;
             }
             
@@ -212,12 +224,19 @@ class IrcService with ChangeNotifier {
               final decrypted = _decryptMessage(jsonData['data']);
               final lines = decrypted.split('\r\n');
               
+              // Debug: Log received messages during registration
+              if (!registrationComplete) {
+                _addMessage(to: 'Status', sender: 'Debug', content: 'Received IRC data: ${lines.where((l) => l.isNotEmpty).join(' | ')}');
+              }
+              
               for (final rawMessage in lines) {
                 if (rawMessage.isEmpty) continue;
                 
                 if (!registrationComplete && (rawMessage.contains(' 001 ') || rawMessage.contains(' 376 ') || rawMessage.contains(' 422 '))) {
                   // 001 = Welcome, 376 = End of MOTD, 422 = No MOTD
                   registrationComplete = true;
+                  _registrationTimer?.cancel();
+                  _connectionTime = DateTime.now();
                   _addMessage(to: 'Status', sender: 'Status', content: 'Connected successfully!');
                   
                   // Handle NickServ authentication if configured
@@ -225,11 +244,12 @@ class IrcService with ChangeNotifier {
                     _sendEncryptedMessage('PRIVMSG NickServ :IDENTIFY $_nickServPassword');
                   }
                   
-                  // Join the initial channel after a short delay
+                  // Join the initial channel after required delay
                   if (!hasJoinedChannel && _lastChannel.isNotEmpty) {
                     hasJoinedChannel = true;
-                    // Shorter delay for better UX
-                    Future.delayed(const Duration(milliseconds: 500), () {
+                    // IRC servers require at least 10 seconds before JOIN
+                    _addMessage(to: 'Status', sender: 'Status', content: 'Waiting 11 seconds before joining $_lastChannel (IRC server requirement)...');
+                    Future.delayed(const Duration(seconds: 11), () {
                       _addMessage(to: 'Status', sender: 'Status', content: 'Joining $_lastChannel...');
                       _sendEncryptedMessage('JOIN $_lastChannel');
                     });
@@ -245,12 +265,13 @@ class IrcService with ChangeNotifier {
             }
           } catch (e) {
             // Fallback for non-JSON messages (shouldn't happen)
-            print('Message parsing error: $e');
+            DebugService.instance.logIrc('Message parsing error: $e');
           }
         },
         onDone: () {
           _isConnected = false;
           _encryptionReady = false;
+          _registrationTimer?.cancel();
           _addMessage(to: 'Status', sender: 'Status', content: 'Disconnected.');
           if (!_manualDisconnect) {
             _scheduleReconnect();
@@ -261,6 +282,7 @@ class IrcService with ChangeNotifier {
           _addMessage(to: 'Status', sender: 'Status', content: 'Error: $error');
           _isConnected = false;
           _encryptionReady = false;
+          _registrationTimer?.cancel();
           if (!_manualDisconnect) {
             _scheduleReconnect();
           }
@@ -272,9 +294,11 @@ class IrcService with ChangeNotifier {
 
   void _sendEncryptedMessage(String message) {
     if (!_encryptionReady) {
-      print('Encryption not ready, dropping message: $message');
+      DebugService.instance.logIrc('Encryption not ready, dropping message: $message');
       return;
     }
+    
+    DebugService.instance.logIrc('Sending: $message');
     
     final encrypted = _encryptMessage(message);
     _channel?.sink.add(json.encode({
@@ -292,6 +316,24 @@ class IrcService with ChangeNotifier {
   }
 
   void _handleMessage(String rawMessage) {
+    // Handle JOIN error responses
+    if (RegExp(r':\S+ 4\d{2} ').hasMatch(rawMessage)) {
+      final match = RegExp(r':\S+ (\d{3}) \S+ (#?\S+)? :?(.*)').firstMatch(rawMessage);
+      if (match != null) {
+        final errorCode = match.group(1)!;
+        final channel = match.group(2) ?? '';
+        final content = match.group(3) ?? rawMessage;
+        
+        // Handle specific JOIN-related errors
+        if (errorCode == '471' || errorCode == '473' || errorCode == '474' || errorCode == '475' || errorCode == '476') {
+          _addMessage(to: 'Status', sender: 'Error', content: 'Failed to join $channel: $content');
+        } else {
+          _addMessage(to: 'Status', sender: 'Server', content: content.trim());
+        }
+      }
+      return;
+    }
+    
     // Server numeric messages should go to Status
     if (RegExp(r':\S+ \d{3} ').hasMatch(rawMessage)) {
       final match = RegExp(r':\S+ \d{3} \S+ :?(.*)').firstMatch(rawMessage);
@@ -304,21 +346,40 @@ class IrcService with ChangeNotifier {
       return;
     }
 
-    // Handle user lists
+    // Handle user lists (NAMES response)
     if (rawMessage.contains(' 353 ')) {
-      final parts = rawMessage.split(' ');
-      if (parts.length > 4) {
-        final channel = parts[4];
-        final userListString = rawMessage.split('$channel :')[1];
+      // Format: :server 353 nick = #channel :user1 user2 user3
+      final match = RegExp(r':\S+ 353 \S+ [=*@] (#\S+) :(.+)').firstMatch(rawMessage);
+      if (match != null) {
+        final channel = match.group(1)!;
+        final userListString = match.group(2)!;
         final users = userListString.split(' ');
 
         if (!_userLists.containsKey(channel)) _userLists[channel] = [];
-        _userLists[channel]?.clear();
-
+        
+        // Add users to existing list (don't clear, as we might get multiple 353 responses)
         for (var user in users) {
-          if (user.isNotEmpty) {
+          if (user.isNotEmpty && !_userLists[channel]!.contains(user)) {
             _userLists[channel]!.add(user);
           }
+        }
+      }
+    }
+    
+    // Handle end of NAMES list
+    if (rawMessage.contains(' 366 ')) {
+      // Format: :server 366 nick #channel :End of /NAMES list
+      final match = RegExp(r':\S+ 366 \S+ (#\S+) :').firstMatch(rawMessage);
+      if (match != null) {
+        final channel = match.group(1)!;
+        // NAMES list is complete, sort the users
+        if (_userLists.containsKey(channel)) {
+          _userLists[channel]!.sort((a, b) {
+            // Remove prefixes for sorting
+            final cleanA = a.replaceAll(RegExp(r'^[@+~&%]'), '');
+            final cleanB = b.replaceAll(RegExp(r'^[@+~&%]'), '');
+            return cleanA.toLowerCase().compareTo(cleanB.toLowerCase());
+          });
         }
       }
     }
@@ -352,9 +413,16 @@ class IrcService with ChangeNotifier {
             _addMessage(to: channel, sender: 'Status', content: '$sender has joined $channel.');
           }
           if (!_userLists.containsKey(channel)) _userLists[channel] = [];
-          _userLists[channel]!.add(sender);
+          
+          // Add user if not already in list
+          if (!_userLists[channel]!.contains(sender)) {
+            _userLists[channel]!.add(sender);
+          }
+          
           if (sender == _nickname) {
             setCurrentBuffer(channel);
+            // Request user list when we join a channel
+            _sendEncryptedMessage('NAMES $channel');
           }
         }
       }
@@ -362,11 +430,37 @@ class IrcService with ChangeNotifier {
     // Handle PART/QUIT/KICK
     else if (rawMessage.contains('PART') || rawMessage.contains('QUIT') || rawMessage.contains('KICK')) {
       final sender = rawMessage.split('!')[0].replaceFirst(':', '').trim();
-      _userLists.forEach((channel, users) {
-        users.removeWhere((user) => user.replaceAll(RegExp(r'[@+~&]'), '') == sender);
-      });
-      if (!_hideJoinQuit) {
-        _addMessage(to: _currentBuffer, sender: 'Status', content: '$sender has left.');
+      
+      if (rawMessage.contains('PART')) {
+        // PART only affects specific channel
+        final channelMatch = RegExp(r'PART (#\S+)').firstMatch(rawMessage);
+        if (channelMatch != null) {
+          final channel = channelMatch.group(1)!;
+          _userLists[channel]?.removeWhere((user) => user.replaceAll(RegExp(r'[@+~&%]'), '') == sender);
+          if (!_hideJoinQuit) {
+            _addMessage(to: channel, sender: 'Status', content: '$sender has left $channel.');
+          }
+        }
+      } else if (rawMessage.contains('KICK')) {
+        // KICK affects specific channel and user
+        final kickMatch = RegExp(r'KICK (#\S+) (\S+)').firstMatch(rawMessage);
+        if (kickMatch != null) {
+          final channel = kickMatch.group(1)!;
+          final kickedUser = kickMatch.group(2)!;
+          _userLists[channel]?.removeWhere((user) => user.replaceAll(RegExp(r'[@+~&%]'), '') == kickedUser);
+          if (!_hideJoinQuit) {
+            _addMessage(to: channel, sender: 'Status', content: '$kickedUser was kicked from $channel by $sender.');
+          }
+        }
+      } else {
+        // QUIT affects all channels
+        _userLists.forEach((channel, users) {
+          users.removeWhere((user) => user.replaceAll(RegExp(r'[@+~&%]'), '') == sender);
+        });
+        if (!_hideJoinQuit) {
+          // Add quit message to current buffer only
+          _addMessage(to: _currentBuffer, sender: 'Status', content: '$sender has quit.');
+        }
       }
     }
     notifyListeners();
@@ -399,10 +493,22 @@ class IrcService with ChangeNotifier {
         case '/join':
           if (parts.length > 1) {
             final channel = parts[1];
+            
+            // Check if enough time has passed since connection
+            if (_connectionTime != null) {
+              final secondsSinceConnection = DateTime.now().difference(_connectionTime!).inSeconds;
+              if (secondsSinceConnection < 10) {
+                final waitTime = 10 - secondsSinceConnection;
+                _addMessage(to: 'Status', sender: 'Status', content: 'Must wait $waitTime more seconds before joining channels.');
+                break;
+              }
+            }
+            
+            // Create buffer but don't switch to it until successful JOIN
             if (!_buffers.containsKey(channel)) {
               _buffers[channel] = [];
             }
-            setCurrentBuffer(channel);
+            _addMessage(to: 'Status', sender: 'Status', content: 'Attempting to join $channel...');
             _sendEncryptedMessage('JOIN $channel');
           }
           break;
@@ -456,6 +562,7 @@ class IrcService with ChangeNotifier {
   void disconnect() {
     _manualDisconnect = true;
     _reconnectTimer?.cancel();
+    _registrationTimer?.cancel();
     if (_isConnected) {
       _sendEncryptedMessage('QUIT :Leaving');
       _channel?.sink.close();
