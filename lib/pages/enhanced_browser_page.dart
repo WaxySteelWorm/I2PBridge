@@ -1,6 +1,5 @@
 // lib/pages/enhanced_browser_page.dart
 import 'dart:convert';
-import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
@@ -37,6 +36,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
   
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   final http.Client _httpClient = http.Client();
+  http.Client? _currentRequestClient;
   
   bool get _canGoBack => _webViewController != null && _historyIndex > 0;
   bool get _canGoForward => _webViewController != null && _historyIndex < _history.length - 1;
@@ -70,6 +70,32 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
 
   void _log(String message) {
     DebugService.instance.logBrowser(message);
+  }
+
+  WebUri? _getBaseUrlForPage(String fullUrl) {
+    // Extract base URL (protocol + domain) from full URL and convert to WebUri
+    try {
+      final uri = Uri.parse(fullUrl);
+      final baseUrlString = '${uri.scheme}://${uri.host}${uri.port != 80 && uri.port != 443 && uri.port > 0 ? ':${uri.port}' : ''}';
+      return WebUri(baseUrlString);
+    } catch (e) {
+      _log('Error parsing baseUrl from $fullUrl: $e');
+      // Fallback: extract everything before the path
+      try {
+        if (fullUrl.contains('://')) {
+          final parts = fullUrl.split('/');
+          if (parts.length >= 3) {
+            final fallbackUrl = '${parts[0]}//${parts[2]}';
+            return WebUri(fallbackUrl);
+          }
+        }
+        // Last resort - try to use the full URL
+        return WebUri(fullUrl);
+      } catch (fallbackError) {
+        _log('Fallback baseUrl parsing also failed: $fallbackError');
+        return null; // Return null if all parsing attempts fail
+      }
+    }
   }
 
   void _toggleEncryption() {
@@ -130,13 +156,43 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     }
   }
 
+  void _stop() {
+    if (_isLoading) {
+      _log('Stopping current request');
+      
+      // Cancel HTTP request if in progress
+      if (_currentRequestClient != null) {
+        _currentRequestClient!.close();
+        _currentRequestClient = null;
+      }
+      
+      // Stop WebView loading
+      if (_webViewController != null) {
+        _webViewController!.stopLoading();
+      }
+      
+      setState(() {
+        _isLoading = false;
+        _progress = 0.0;
+      });
+    }
+  }
+
   Future<void> _loadPage(String url, {bool fromHistory = false, bool forceRefresh = false}) async {
     if (url.trim().isEmpty) return;
     
-    String fullUrl = url.startsWith('http') ? url : 'http://$url';
-    final cleanUrl = fullUrl.replaceFirst(RegExp(r'^https?://'), '');
+    // Ultra-simple URL processing
+    String cleanInput = url.trim();
+    String fullUrl = cleanInput.startsWith('http') ? cleanInput : 'http://$cleanInput';
+    String cleanUrl = cleanInput.replaceFirst(RegExp(r'^https?://'), '');
     
-    _log('Loading page: $fullUrl');
+    _log('🌍 _loadPage START: $fullUrl');
+    _log('   - Original input: $url');
+    _log('   - From history: $fromHistory');
+    _log('   - Force refresh: $forceRefresh');
+    _log('   - Full URL: $fullUrl');
+    _log('   - Clean URL: $cleanUrl');
+    DebugService.instance.logBrowser('Loading: $fullUrl');
     
     setState(() {
       _isLoading = true;
@@ -170,11 +226,15 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
       setState(() => _progress = 0.9);
       
       if (_webViewController != null) {
+        // Set proper baseUrl so relative links work correctly
+        final baseUrl = _getBaseUrlForPage(fullUrl);
+        _log('Loading data with baseUrl: $baseUrl');
+        
         await _webViewController!.loadData(
           data: enhancedHtml,
           mimeType: "text/html",
           encoding: "utf8",
-          baseUrl: WebUri(fullUrl),
+          baseUrl: baseUrl,
         );
       }
       
@@ -183,6 +243,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
       
     } catch (e) {
       _log('Error loading page: $e');
+      _log('ERROR in _loadPage: $e');
+      _log('Stack trace: ${StackTrace.current}');
+      
       final errorHtml = _createErrorPage('Failed to load $cleanUrl: ${e.toString()}');
       if (_webViewController != null) {
         await _webViewController!.loadData(data: errorHtml, mimeType: "text/html");
@@ -196,12 +259,26 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     }
   }
 
+  String _cleanupAndReturn(String content) {
+    // Clean up the request client
+    _currentRequestClient?.close();
+    _currentRequestClient = null;
+    return content;
+  }
+
   Future<String> _fetchFromBridge(String fullUrl) async {
     const maxRetries = 2;
     
+    // Create a new client for this request that can be cancelled
+    _currentRequestClient = http.Client();
+    
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
       try {
-        _log('Fetching from bridge (attempt ${attempt + 1}): $fullUrl');
+        _log('🌉 Fetching from bridge (attempt ${attempt + 1}): $fullUrl');
+        DebugService.instance.logHttp('Bridge request attempt ${attempt + 1}: $fullUrl');
+        
+        _log('Making HTTP request to bridge for: $fullUrl');
+        _log('Encryption enabled: $_encryptionEnabled');
         
         if (_encryptionEnabled) {
           final sessionToken = _encryption.generateChannelId();
@@ -219,10 +296,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
             if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           };
           
-          final body = 'url=$encryptedUrl&encrypted=true';
+          final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
           
           DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
-          final response = await _httpClient.post(
+          final response = await _currentRequestClient!.post(
             Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
             headers: headers,
             body: body,
@@ -242,9 +319,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
               if (content.toString().trim().isEmpty) {
                 throw Exception('No content in response');
               }
-              return content.toString();
+              return _cleanupAndReturn(content.toString());
             } catch (jsonError) {
-              return response.body;
+              return _cleanupAndReturn(response.body);
             }
           } else {
             throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
@@ -261,7 +338,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
           if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
           
           DebugService.instance.logHttp('GET $browseUrl - Direct request');
-          final response = await _httpClient.get(browseUrl, headers: headers).timeout(const Duration(seconds: 45));
+          final response = await _currentRequestClient!.get(browseUrl, headers: headers).timeout(const Duration(seconds: 45));
           DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
           
           _log('Bridge response: ${response.statusCode}');
@@ -277,37 +354,42 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
               if (content.toString().trim().isEmpty) {
                 throw Exception('No content in response');
               }
-              return content.toString();
+              return _cleanupAndReturn(content.toString());
             } catch (jsonError) {
-              return response.body;
+              return _cleanupAndReturn(response.body);
             }
           } else {
             throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
           }
         }
       } catch (e) {
-        _log('Bridge fetch error (attempt ${attempt + 1}): $e');
+        _log('❌ Bridge fetch error (attempt ${attempt + 1}): $e');
+        DebugService.instance.logBrowser('Bridge error attempt ${attempt + 1}: $e');
+        _log('Bridge fetch error: $e');
+        _log('Error type: ${e.runtimeType}');
+        
         if (attempt == maxRetries) {
+          _log('Max retries reached, rethrowing error');
           rethrow;
         }
         await Future.delayed(Duration(seconds: attempt + 1));
       }
     }
     
+    // Clean up the request client
+    _currentRequestClient?.close();
+    _currentRequestClient = null;
+    
     throw Exception('Failed after $maxRetries retries');
   }
 
   String _enhanceHtmlForMobile(String html, String baseUrl) {
-    final Uri baseUri = Uri.parse(baseUrl);
+    _log('Enhancing HTML for mobile (simple mode)');
     
-    // Fix relative URLs for images and links
-    html = _fixRelativeUrls(html, baseUri);
+    // Fix relative links SAFELY - no complex URI parsing
+    html = _fixLinksSimple(html, baseUrl);
     
-    // Convert all images to base64 or proxy them through our bridge
-    html = _proxyImages(html, baseUri);
-    
-    // Remove any meta refreshes or redirects that would bypass our handler
-    html = _removeMetaRedirects(html);
+    // Add mobile CSS
     
     final mobileCSS = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
@@ -493,81 +575,82 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     return html;
   }
 
-  String _fixRelativeUrls(String html, Uri baseUri) {
-    // Fix relative image URLs with double quotes
-    html = html.replaceAllMapped(
-      RegExp(r'<img[^>]*src="([^"]*)"[^>]*>', caseSensitive: false),
-      (match) {
-        final fullMatch = match.group(0)!;
-        final src = match.group(1)!;
-        
-        if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
-          return fullMatch;
-        }
-        
-        final absoluteUrl = baseUri.resolve(src).toString();
-        return fullMatch.replaceFirst(src, absoluteUrl);
-      },
-    );
-
-    // Fix relative image URLs with single quotes
-    html = html.replaceAllMapped(
-      RegExp('<img[^>]*src=\'([^\']*)\'[^>]*>', caseSensitive: false),
-      (match) {
-        final fullMatch = match.group(0)!;
-        final src = match.group(1)!;
-        
-        if (src.startsWith('http://') || src.startsWith('https://') || src.startsWith('data:')) {
-          return fullMatch;
-        }
-        
-        final absoluteUrl = baseUri.resolve(src).toString();
-        return fullMatch.replaceFirst(src, absoluteUrl);
-      },
-    );
-
-    // Fix relative links with double quotes
-    html = html.replaceAllMapped(
-      RegExp(r'<a[^>]*href="([^"]*)"[^>]*>', caseSensitive: false),
-      (match) {
-        final fullMatch = match.group(0)!;
-        final href = match.group(1)!;
-        
-        if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('data:') || href.startsWith('#')) {
-          return fullMatch;
-        }
-        
-        final absoluteUrl = baseUri.resolve(href).toString();
-        return fullMatch.replaceFirst(href, absoluteUrl);
-      },
-    );
-
-    // Fix relative links with single quotes
-    html = html.replaceAllMapped(
-      RegExp('<a[^>]*href=\'([^\']*)\'[^>]*>', caseSensitive: false),
-      (match) {
-        final fullMatch = match.group(0)!;
-        final href = match.group(1)!;
-        
-        if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('data:') || href.startsWith('#')) {
-          return fullMatch;
-        }
-        
-        final absoluteUrl = baseUri.resolve(href).toString();
-        return fullMatch.replaceFirst(href, absoluteUrl);
-      },
-    );
-
-    return html;
-  }
-
-  // THIS FUNCTION IS DISABLED TO FIX THE BUILD ERROR
-  String _removeMetaRedirects(String html) {
-    return html;
-  }
-
-  // THIS FUNCTION IS DISABLED TO FIX THE BUILD ERROR
-  String _proxyImages(String html, Uri baseUri) {
+  // Enhanced link fixing to handle more cases
+  String _fixLinksSimple(String html, String baseUrl) {
+    final baseUri = _getBaseUrlForPage(baseUrl);
+    _log('Fixing links with base URI: ${baseUri?.toString() ?? 'null'}');
+    
+    try {
+      final uri = Uri.parse(baseUrl);
+      final scheme = uri.scheme;
+      final host = uri.host;
+      final port = uri.port != 80 && uri.port != 443 && uri.port > 0 ? ':${uri.port}' : '';
+      
+      // Fix href="/path" -> href="http://domain/path"  
+      html = html.replaceAllMapped(
+        RegExp(r'href="(/[^"]*)"', caseSensitive: false),
+        (match) => 'href="$scheme://$host$port${match.group(1)}"',
+      );
+      
+      // Fix href='/path' -> href='http://domain/path'
+      html = html.replaceAllMapped(
+        RegExp(r"href='(/[^']*)'", caseSensitive: false),
+        (match) => "href='$scheme://$host$port${match.group(1)}'",
+      );
+      
+      // Fix relative paths like href="page.html" -> href="http://domain/currentdir/page.html"
+      final currentPath = uri.path.endsWith('/') ? uri.path : '${uri.path.substring(0, uri.path.lastIndexOf('/') + 1)}';
+      
+      html = html.replaceAllMapped(
+        RegExp(r'href="([^":/]+(?:\.[^"]*)?)"', caseSensitive: false),
+        (match) {
+          final relativePath = match.group(1)!;
+          if (!relativePath.startsWith('#') && !relativePath.contains('://')) {
+            return 'href="$scheme://$host$port$currentPath$relativePath"';
+          }
+          return match.group(0)!; // Keep unchanged
+        },
+      );
+      
+      html = html.replaceAllMapped(
+        RegExp(r"href='([^':/]+(?:\.[^']*)?)'", caseSensitive: false),
+        (match) {
+          final relativePath = match.group(1)!;
+          if (!relativePath.startsWith('#') && !relativePath.contains('://')) {
+            return "href='$scheme://$host$port$currentPath$relativePath'";
+          }
+          return match.group(0)!; // Keep unchanged
+        },
+      );
+      
+      // Fix src attributes for images too
+      html = html.replaceAllMapped(
+        RegExp(r'src="(/[^"]*)"', caseSensitive: false),
+        (match) => 'src="$scheme://$host$port${match.group(1)}"',
+      );
+      
+      _log('✅ Fixed relative links for: $scheme://$host$port');
+      
+    } catch (e) {
+      _log('⚠️ Error parsing baseUrl for link fixing: $e, falling back to simple method');
+      
+      // Fallback to simple method
+      String domain = baseUrl.replaceFirst(RegExp(r'^https?://'), '');
+      if (domain.contains('/')) {
+        domain = domain.split('/')[0];
+      }
+      
+      html = html.replaceAllMapped(
+        RegExp(r'href="(/[^"]*)"', caseSensitive: false),
+        (match) => 'href="http://$domain${match.group(1)}"',
+      );
+      
+      html = html.replaceAllMapped(
+        RegExp(r"href='(/[^']*)'", caseSensitive: false),
+        (match) => "href='http://$domain${match.group(1)}'",
+      );
+    }
+    
     return html;
   }
 
@@ -698,8 +781,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
                   ),
                 ),
                 IconButton(
-                  icon: const Icon(Icons.refresh),
-                  onPressed: _isLoading ? null : _refresh,
+                  icon: Icon(_isLoading ? Icons.stop : Icons.refresh),
+                  onPressed: _isLoading ? _stop : _refresh,
+                  tooltip: _isLoading ? 'Stop' : 'Refresh',
                 ),
               ],
             ),
@@ -770,17 +854,22 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
       onWebViewCreated: (controller) {
         _webViewController = controller;
         
-        // Add handler for link clicks
+        // Add JavaScript handler for link clicks
         controller.addJavaScriptHandler(
           handlerName: 'linkClicked',
           callback: (args) {
             if (args.isNotEmpty) {
               final url = args[0].toString();
-              _log('JavaScript link click: $url');
+              _log('🔗 JavaScript link click detected: $url');
+              DebugService.instance.logBrowser('Link click from JS: $url');
               _loadPage(url);
+            } else {
+              _log('⚠️ JavaScript link click with no URL');
             }
           },
         );
+        
+        _log('WebView controller initialized with link handler');
       },
       onProgressChanged: (controller, progress) {
         setState(() {
@@ -796,65 +885,97 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
       onLoadStop: (controller, url) async {
         _log('WebView load stop: ${url?.toString()}');
         
-        // Inject JavaScript to intercept all link clicks AND prevent redirects
-        await controller.evaluateJavascript(source: '''
+        // Inject comprehensive link handling JavaScript
+        _log('🔧 Injecting link handling JavaScript');
+        
+        try {
+          await controller.evaluateJavascript(source: '''
           (function() {
+            console.log('🚀 I2P Browser link handler starting...');
+            
             // Remove any existing listeners
-            document.removeEventListener('click', window.i2pLinkHandler);
+            if (window.i2pLinkHandler) {
+              document.removeEventListener('click', window.i2pLinkHandler, true);
+            }
             
-            // Override window.location and related redirect methods
-            var originalLocation = window.location;
-            Object.defineProperty(window, 'location', {
-              get: function() { return originalLocation; },
-              set: function(url) {
-                console.log('Redirect intercepted: ' + url);
-                window.flutter_inappwebview.callHandler('linkClicked', url);
-              }
-            });
-            
-            // Override location.href
-            Object.defineProperty(originalLocation, 'href', {
-              get: function() { return originalLocation.href; },
-              set: function(url) {
-                console.log('Location.href intercepted: ' + url);
-                window.flutter_inappwebview.callHandler('linkClicked', url);
-              }
-            });
-            
-            // Override location.replace
-            originalLocation.replace = function(url) {
-              console.log('Location.replace intercepted: ' + url);
-              window.flutter_inappwebview.callHandler('linkClicked', url);
-            };
-            
-            // Create new click handler
+            // Create comprehensive link click handler
             window.i2pLinkHandler = function(e) {
-              var target = e.target;
+              console.log('Click detected on:', e.target.tagName, e.target.href || 'no href');
               
-              // Find the closest anchor tag
-              while (target && target.tagName !== 'A') {
+              var target = e.target;
+              var attempts = 0;
+              
+              // Walk up the DOM tree to find an anchor tag (max 5 levels)
+              while (target && target.tagName !== 'A' && attempts < 5) {
                 target = target.parentElement;
+                attempts++;
+                if (target) {
+                  console.log('Walking up to:', target.tagName);
+                }
               }
               
-              if (target && target.href) {
+              if (target && target.tagName === 'A' && target.href) {
+                console.log('Found anchor with href:', target.href);
+                
+                // Skip anchor links (#section)
+                if (target.href.indexOf('#') === target.href.length - target.href.split('#')[1].length - 1 && 
+                    target.href.split('#')[1] && 
+                    target.href.split('#')[0] === window.location.href.split('#')[0]) {
+                  console.log('Ignoring anchor link:', target.href);
+                  return;
+                }
+                
+                // Skip javascript: links
+                if (target.href.toLowerCase().startsWith('javascript:')) {
+                  console.log('Ignoring javascript link:', target.href);
+                  return;
+                }
+                
+                // Skip mailto: links
+                if (target.href.toLowerCase().startsWith('mailto:')) {
+                  console.log('Ignoring mailto link:', target.href);
+                  return;
+                }
+                
+                console.log('Preventing default and calling Flutter handler');
                 e.preventDefault();
                 e.stopPropagation();
                 
-                console.log('Link clicked: ' + target.href);
-                
-                // Send message to Flutter
-                window.flutter_inappwebview.callHandler('linkClicked', target.href);
+                try {
+                  window.flutter_inappwebview.callHandler('linkClicked', target.href);
+                  console.log('Successfully called Flutter handler with:', target.href);
+                } catch (err) {
+                  console.error('Error calling Flutter handler:', err);
+                }
                 
                 return false;
+              } else {
+                console.log('No valid anchor found after walking up DOM');
               }
             };
             
-            // Add click listener to document
+            // Add click listener with capture=true to catch early
             document.addEventListener('click', window.i2pLinkHandler, true);
             
-            console.log('I2P link handler and redirect interceptor installed');
+            var linkCount = document.querySelectorAll('a[href]').length;
+            console.log('I2P link handler installed. Found', linkCount, 'links on page');
+            
+            // Debug: Log all links found
+            var allLinks = document.querySelectorAll('a[href]');
+            for (var i = 0; i < Math.min(allLinks.length, 10); i++) {
+              console.log('Link', i + ':', allLinks[i].href);
+            }
+            if (allLinks.length > 10) {
+              console.log('... and', allLinks.length - 10, 'more links');
+            }
           })();
-        ''');
+          ''');
+        
+          _log('✓ Link handling JavaScript injection completed');
+        
+        } catch (jsError) {
+          _log('❌ JavaScript injection failed: $jsError');
+        }
         
         setState(() {
           _isLoading = false;
@@ -864,27 +985,32 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
       shouldOverrideUrlLoading: (controller, navigationAction) async {
         final uri = navigationAction.request.url!;
         final url = uri.toString();
+        final navigationType = navigationAction.navigationType;
         
-        _log('Navigation intercepted: $url');
+        _log('🧭 Navigation attempt: $url (type: $navigationType)');
+        DebugService.instance.logBrowser('Navigation: $url (type: $navigationType)');
         
-        // Allow data URLs and about:blank
+        // Allow data URLs and about:blank - these are needed for our loadData calls
         if (url.startsWith('data:') || url.startsWith('about:blank')) {
+          _log('✅ Allowing data/blank URL: ${url.substring(0, 50)}...');
           return NavigationActionPolicy.ALLOW;
         }
         
-        // Block ALL other navigation and handle it ourselves
-        if (url.contains('.i2p') || url.startsWith('http://') || url.startsWith('https://')) {
-          _log('Intercepting navigation to: $url');
-          // Don't await this - let it run async
-          Future.microtask(() => _loadPage(url));
+        // For HTTP/HTTPS URLs, intercept and load through our bridge
+        if (url.startsWith('http://') || url.startsWith('https://')) {
+          _log('🚫 Intercepting HTTP navigation to load through bridge: $url');
+          DebugService.instance.logBrowser('Intercepting navigation: $url');
+          _loadPage(url);
           return NavigationActionPolicy.CANCEL;
         }
         
-        _log('Blocking unknown navigation: $url');
-        return NavigationActionPolicy.CANCEL;
+        // Log and allow other protocols
+        _log('✅ Allowing other protocol: $url');
+        return NavigationActionPolicy.ALLOW;
       },
       onConsoleMessage: (controller, consoleMessage) {
-        _log('Console: ${consoleMessage.message}');
+        _log('📝 JS Console [${consoleMessage.messageLevel}]: ${consoleMessage.message}');
+        DebugService.instance.logBrowser('JS Console: ${consoleMessage.message}');
       },
     );
   }
