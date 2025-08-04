@@ -46,3 +46,38 @@ app.*.map.json
 
 server.js
 ecosystem.config.js
+=======
+# MISC
+server.js
+ecosystem.cofig.js
+CLAUDE.md
+ 
+# Fastlane
+ios/fastlane/report.xml
+ios/fastlane/Preview.html
+ios/fastlane/screenshots/**/*.png
+ios/fastlane/test_output
+ios/fastlane/README.md
+ios/fastlane/Matchfile
+
+# Match - IMPORTANT: Never commit the Matchfile if it contains tokens
+fastlane/Matchfile
+
+# Environment files
+.env
+.env.*
+
+# Provisioning profiles (Match handles these)
+*.mobileprovision
+
+# Certificates
+*.p12
+*.cer
+
+# macOS
+.DS_Store
+
+# Temporary files
+*.swp
+*~.github/workflows/release_ios.yml
+

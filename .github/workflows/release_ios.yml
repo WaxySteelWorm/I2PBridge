@@ -1,0 +1,46 @@
+name: Release iOS App v2
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release_ios:
+    runs-on: [self-hosted, macOS, ARM64]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Configure Git for Match
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.MATCH_GIT_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan github.com >> ~/.ssh/known_hosts
+        
+    - name: Setup keychain for codesigning
+      run: |
+        # Unlock keychain and set permissions for codesigning
+        security unlock-keychain -p "" ~/Library/Keychains/login.keychain
+        security set-key-partition-list -S apple-tool:,apple: -s -k "" ~/Library/Keychains/login.keychain
+        # Set keychain timeout to prevent locking during build
+        security set-keychain-settings -t 3600 ~/Library/Keychains/login.keychain
+        
+    - name: Setup Flutter and install pods
+      run: |
+        flutter pub get
+        cd ios
+        rm -rf Pods
+        rm -f Podfile.lock  
+        pod install
+
+    - name: Run Fastlane Build
+      env:
+        MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
+        FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+      run: |
+        cd ios
+        bundle exec fastlane release

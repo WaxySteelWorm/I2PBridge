@@ -9,9 +9,19 @@ jobs:
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Debug runner environment
+        run: |
+          echo "Current user: $(whoami)"
+          echo "User ID: $(id)"
+          echo "Home directory: $HOME"
+          echo "Current directory: $(pwd)"
+          ls -la /Users/ || echo "Cannot list /Users/"
+          echo "Runner temp: $RUNNER_TEMP"
+          echo "Runner workspace: $GITHUB_WORKSPACE"
+      
       - run: flutter pub get
       - run: flutter build ios --no-codesign
-
   build-android:
     runs-on: [self-hosted, linux]
     steps:
