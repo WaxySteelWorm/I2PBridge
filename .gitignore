@@ -70,3 +70,10 @@ npm-debug.log*
 
 # PM2 logs
 .pm2/
+
+
+ios/Runner.ipa
+ios/Runner.xcarchive/
+ios/fastlane/
+server.js
+ios/Runner/
