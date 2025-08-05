@@ -41,6 +41,8 @@ jobs:
         MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         FASTLANE_USER: ${{ secrets.FASTLANE_USER }}
         FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD: ${{ secrets.FASTLANE_APPLE_APPLICATION_SPECIFIC_PASSWORD }}
+        I2P_BRIDGE_API_KEY: ${{ secrets.I2P_BRIDGE_API_KEY }}
+
       run: |
         cd ios
         bundle exec fastlane release
