@@ -12,7 +12,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:crypto/crypto.dart';
+import 'package:provider/provider.dart';
 import '../assets/drop_logo.dart';
+import '../services/auth_service.dart';
 import '../services/debug_service.dart';
 
 class UploadPage extends StatefulWidget {
@@ -92,6 +94,19 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
     _maxViewsController.dispose();
     super.dispose();
   }
+  
+  /// Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders() async {
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      await authService.ensureAuthenticated();
+      return authService.getAuthHeaders();
+    } catch (e) {
+      DebugService.instance.logUpload('Upload authentication failed: $e');
+      // Return empty headers - the upload will likely fail but won't crash
+      return <String, String>{};
+    }
+  }
 
   Future<void> _pickFile() async {
     try {
@@ -170,11 +185,9 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           Uri.parse('https://bridge.stormycloud.org/api/v1/upload')
         );
         
-        // Use the pinned HTTP client
-        request = http.MultipartRequest(
-          'POST', 
-          Uri.parse('https://bridge.stormycloud.org/api/v1/upload')
-        );
+        // Add authenticated headers
+        final headers = await _getAuthenticatedHeaders();
+        request.headers.addAll(headers);
         
         request.files.add(
           await http.MultipartFile.fromPath(

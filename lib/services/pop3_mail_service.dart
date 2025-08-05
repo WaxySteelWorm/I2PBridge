@@ -13,6 +13,7 @@ import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'debug_service.dart';
+import 'auth_service.dart';
 
 
 class EmailMessage {
@@ -90,6 +91,9 @@ class EncryptedCredentials {
 }
 
 class Pop3MailService with ChangeNotifier {
+  // Authentication service
+  AuthService? _authService;
+  
   // Encryption components
   late Uint8List _credentialKey;
   late Uint8List _credentialIV;
@@ -125,6 +129,26 @@ class Pop3MailService with ChangeNotifier {
   Pop3MailService() {
     _initializeEncryption();
     _httpClient = _createPinnedHttpClient();
+  }
+  
+  // Set the authentication service (called from UI)
+  void setAuthService(AuthService authService) {
+    _authService = authService;
+  }
+  
+  // Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders() async {
+    if (_authService != null) {
+      await _authService!.ensureAuthenticated();
+      return _authService!.getAuthHeaders();
+    }
+    
+    // Fallback to legacy headers if AuthService not available
+    return {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': appUserAgent,
+    };
   }
 
   http.Client _createPinnedHttpClient() {
@@ -247,13 +271,10 @@ class Pop3MailService with ChangeNotifier {
 
       _encryptedCredentials = _encryptCredentials(username, password);
 
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-        },
+        headers: headers,
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'start': 1,
@@ -305,13 +326,10 @@ class Pop3MailService with ChangeNotifier {
     notifyListeners();
 
     try {
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-        },
+        headers: headers,
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'start': 1,
@@ -406,13 +424,10 @@ Future<void> _prefetchRecentMessages() async {
     if (!_isConnected || _encryptedCredentials == null) return null;
 
     try {
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-        },
+        headers: headers,
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
@@ -490,13 +505,10 @@ Future<void> _prefetchRecentMessages() async {
     _updateStatus('Loading message...');
 
     try {
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-        },
+        headers: headers,
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
@@ -611,13 +623,10 @@ Future<void> _prefetchRecentMessages() async {
         'iv': base64.encode(emailIV),
       };
 
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/send'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-        },
+        headers: headers,
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'emailData': encryptedEmailData,

@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'services/irc_service.dart';
 import 'services/pop3_mail_service.dart';  // Add this import
 import 'services/debug_service.dart';
+import 'services/auth_service.dart';
 import 'pages/enhanced_browser_page.dart';  // Changed from browser_page.dart
 import 'pages/upload_page.dart';
 import 'pages/irc_page.dart';
@@ -24,6 +25,7 @@ void main(List<String> args) {
   runApp(
     MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
       providers: [
+        ChangeNotifierProvider(create: (context) => AuthService()),
         ChangeNotifierProvider(create: (context) => IrcService()),
         ChangeNotifierProvider(create: (context) => Pop3MailService()),  // Add this line
       ],

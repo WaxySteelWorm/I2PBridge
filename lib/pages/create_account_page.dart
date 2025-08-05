@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:crypto/crypto.dart';
+import 'package:provider/provider.dart';
+import '../services/auth_service.dart';
 
 class CreateAccountPage extends StatefulWidget {
   const CreateAccountPage({super.key});
@@ -47,6 +49,22 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
     _confirmPasswordController.dispose();
     _nickController.dispose();
     super.dispose();
+  }
+  
+  /// Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders() async {
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      await authService.ensureAuthenticated();
+      return authService.getAuthHeaders();
+    } catch (e) {
+      // Fallback to basic headers if authentication fails
+      return {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': appUserAgent,
+      };
+    }
   }
 
   http.Client _createPinnedHttpClient() {
@@ -108,13 +126,10 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
           await Future.delayed(const Duration(seconds: 3));
         }
 
+        final headers = await _getAuthenticatedHeaders();
         final response = await _httpClient.post(
           Uri.parse('$_serverBaseUrl/api/v1/account/create'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': appUserAgent,
-          },
+          headers: headers,
           body: json.encode({
             'mail': _accountController.text.trim(),
             'pw1': _passwordController.text,

@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/pop3_mail_service.dart';
+import '../services/auth_service.dart';
 import 'compose_mail_page.dart';
 import 'read_mail_page.dart';
 import 'create_account_page.dart';
@@ -24,6 +25,14 @@ class _MailPageState extends State<MailPage> {
   void initState() {
     super.initState();
     _mailService = Pop3MailService();
+  }
+  
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Inject AuthService into mail service when available
+    final authService = Provider.of<AuthService>(context, listen: false);
+    _mailService.setAuthService(authService);
   }
   
   @override

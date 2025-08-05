@@ -3,9 +3,11 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import '../data/popular_sites.dart';
 import '../services/encryption_service.dart';
 import '../services/debug_service.dart';
+import '../services/auth_service.dart';
 
 class EnhancedBrowserPage extends StatefulWidget {
   final String? initialUrl;
@@ -66,6 +68,48 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     _lockAnimationController.dispose();
     _httpClient.close();
     super.dispose();
+  }
+  
+  /// Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders({Map<String, String>? additionalHeaders}) async {
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      await authService.ensureAuthenticated();
+      
+      final headers = Map<String, String>.from(authService.getAuthHeaders());
+      
+      // Add browser-specific headers
+      headers.addAll({
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+      });
+      
+      // Add any additional headers
+      if (additionalHeaders != null) {
+        headers.addAll(additionalHeaders);
+      }
+      
+      return headers;
+    } catch (e) {
+      DebugService.instance.logBrowser('Browser authentication failed: $e');
+      
+      // Fallback to basic headers (will fail on server, but prevents crash)
+      final headers = <String, String>{
+        'User-Agent': appUserAgent,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+      };
+      
+      if (additionalHeaders != null) {
+        headers.addAll(additionalHeaders);
+      }
+      
+      return headers;
+    }
   }
 
   void _log(String message) {
@@ -284,18 +328,14 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
           final sessionToken = _encryption.generateChannelId();
           final encryptedUrl = _encryption.encryptUrl(fullUrl);
           
-          final headers = {
+          final additionalHeaders = {
             'Content-Type': 'application/x-www-form-urlencoded',
             'X-Session-Token': sessionToken,
             'X-Privacy-Mode': 'enabled',
-            'User-Agent': appUserAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
             if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           };
           
+          final headers = await _getAuthenticatedHeaders(additionalHeaders: additionalHeaders);
           final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
           
           DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
@@ -328,14 +368,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
           }
         } else {
           final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}');
-          final headers = {
-            'User-Agent': appUserAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-            'Accept-Encoding': 'gzip, deflate',
-            'Connection': 'keep-alive',
+          final additionalHeaders = <String, String>{
+            if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           };
-          if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
+          
+          final headers = await _getAuthenticatedHeaders(additionalHeaders: additionalHeaders);
           
           DebugService.instance.logHttp('GET $browseUrl - Direct request');
           final response = await _currentRequestClient!.get(browseUrl, headers: headers).timeout(const Duration(seconds: 45));
