@@ -4,7 +4,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:math';
-import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/export.dart';
 import 'debug_service.dart';
 
@@ -30,20 +29,32 @@ class EncryptionService {
     _sessionKey = secureRandom.nextBytes(32); // 256-bit key for AES
     _sessionIV = secureRandom.nextBytes(16);  // 128-bit IV for AES
     
-    // Derive mail-specific keys from session key
-    _mailKey = _deriveKey(_sessionKey, 'mail_key');
-    _mailIV = _deriveKey(_sessionKey, 'mail_iv').sublist(0, 16);
+    // Derive mail-specific keys from session key using HKDF
+    _mailKey = _deriveKey(_sessionKey, 'mail_key', keyLength: 32); // 256-bit key
+    _mailIV = _deriveKey(_sessionKey, 'mail_iv', keyLength: 16);   // 128-bit IV
     
     _initialized = true;
   }
 
-  // Derive a key from the master session key using a context string
-  Uint8List _deriveKey(Uint8List masterKey, String context) {
-    final contextBytes = utf8.encode(context);
-    final combined = Uint8List.fromList([...masterKey, ...contextBytes]);
+  // Derive a key from the master session key using HKDF (RFC 5869)
+  Uint8List _deriveKey(Uint8List masterKey, String context, {int keyLength = 32}) {
+    // Use HKDF-SHA256 for secure key derivation
+    final hkdf = HKDFKeyDerivator(SHA256Digest());
     
-    final digest = SHA256Digest();
-    return digest.process(combined);
+    // Generate a static salt from context to ensure deterministic derivation
+    // In production, consider using a random salt stored with the session
+    final contextBytes = utf8.encode(context);
+    final saltDigest = SHA256Digest();
+    final salt = saltDigest.process(Uint8List.fromList([
+      ...utf8.encode('I2PBridge-KDF-Salt-v1'),
+      ...contextBytes
+    ])).sublist(0, 16); // Use first 16 bytes as salt
+    
+    // Initialize HKDF with salt and input key material (IKM)
+    hkdf.init(HkdfParameters(masterKey, keyLength, salt, contextBytes));
+    
+    // Derive the key
+    return hkdf.process(Uint8List(keyLength));
   }
 
   // Get a cryptographically secure random number generator
