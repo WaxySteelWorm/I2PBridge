@@ -19,13 +19,12 @@ class EnhancedBrowserPage extends StatefulWidget {
   State<EnhancedBrowserPage> createState() => _EnhancedBrowserPageState();
 }
 
-class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTickerProviderStateMixin {
+class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
   final TextEditingController _urlController = TextEditingController();
   final EncryptionService _encryption = EncryptionService();
   
   InAppWebViewController? _webViewController;
   bool _isLoading = false;
-  bool _encryptionEnabled = true;
   double _progress = 0;
   String _currentUrl = '';
   String _currentBaseUrl = '';
@@ -33,8 +32,6 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
   final List<String> _history = [];
   int _historyIndex = -1;
   
-  late AnimationController _lockAnimationController;
-  late Animation<double> _lockAnimation;
   
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   final http.Client _httpClient = http.Client();
@@ -48,15 +45,6 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     super.initState();
     _encryption.initialize();
     
-    _lockAnimationController = AnimationController(
-      duration: const Duration(milliseconds: 300),
-      vsync: this,
-    );
-    _lockAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _lockAnimationController, curve: Curves.easeInOut)
-    );
-    
-    if (_encryptionEnabled) _lockAnimationController.forward();
     
     if (widget.initialUrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadPage(widget.initialUrl!));
@@ -65,7 +53,6 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
 
   @override
   void dispose() {
-    _lockAnimationController.dispose();
     _httpClient.close();
     super.dispose();
   }
@@ -142,33 +129,6 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     }
   }
 
-  void _toggleEncryption() {
-    setState(() {
-      _encryptionEnabled = !_encryptionEnabled;
-    });
-    
-    if (_encryptionEnabled) {
-      _lockAnimationController.forward();
-    } else {
-      _lockAnimationController.reverse();
-    }
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(_encryptionEnabled ? Icons.lock : Icons.lock_open, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
-            Text(_encryptionEnabled ? 'Privacy Mode enabled' : 'Privacy Mode disabled'),
-          ],
-        ),
-        backgroundColor: _encryptionEnabled ? Colors.green : Colors.orange,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
 
   Future<void> _goBack() async {
     if (_webViewController != null) {
@@ -223,7 +183,12 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
   }
 
   Future<void> _loadPage(String url, {bool fromHistory = false, bool forceRefresh = false}) async {
-    if (url.trim().isEmpty) return;
+    _log('🌍 _loadPage CALLED with: $url (fromHistory: $fromHistory, forceRefresh: $forceRefresh)');
+    
+    if (url.trim().isEmpty) {
+      _log('❌ _loadPage: Empty URL provided, returning');
+      return;
+    }
     
     // Ultra-simple URL processing
     String cleanInput = url.trim();
@@ -236,6 +201,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     _log('   - Force refresh: $forceRefresh');
     _log('   - Full URL: $fullUrl');
     _log('   - Clean URL: $cleanUrl');
+    _log('   - Current loading state: $_isLoading');
     DebugService.instance.logBrowser('Loading: $fullUrl');
     
     setState(() {
@@ -313,91 +279,60 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
   Future<String> _fetchFromBridge(String fullUrl) async {
     const maxRetries = 2;
     
+    // Clean up any existing client first
+    _currentRequestClient?.close();
+    
     // Create a new client for this request that can be cancelled
     _currentRequestClient = http.Client();
+    _log('🔧 Created new HTTP client for request: $fullUrl');
     
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         _log('🌉 Fetching from bridge (attempt ${attempt + 1}): $fullUrl');
         DebugService.instance.logHttp('Bridge request attempt ${attempt + 1}: $fullUrl');
         
-        _log('Making HTTP request to bridge for: $fullUrl');
-        _log('Encryption enabled: $_encryptionEnabled');
+        _log('Making encrypted request to bridge for: $fullUrl');
         
-        if (_encryptionEnabled) {
-          final sessionToken = _encryption.generateChannelId();
-          final encryptedUrl = _encryption.encryptUrl(fullUrl);
+        final sessionToken = _encryption.generateChannelId();
+        final encryptedUrl = _encryption.encryptUrl(fullUrl);
+        
+        final additionalHeaders = {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'X-Session-Token': sessionToken,
+          'X-Privacy-Mode': 'enabled',
+          if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
+        };
+        
+        final headers = await _getAuthenticatedHeaders(additionalHeaders: additionalHeaders);
+        final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
+        
+        DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
+        final response = await _currentRequestClient!.post(
+          Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
+          headers: headers,
+          body: body,
+        ).timeout(const Duration(seconds: 45));
+        DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
+        
+        _log('Bridge response: ${response.statusCode}');
+        
+        if (response.statusCode == 200) {
+          if (response.body.trim().isEmpty) {
+            throw Exception('Empty response from server');
+          }
           
-          final additionalHeaders = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Session-Token': sessionToken,
-            'X-Privacy-Mode': 'enabled',
-            if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
-          };
-          
-          final headers = await _getAuthenticatedHeaders(additionalHeaders: additionalHeaders);
-          final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
-          
-          DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
-          final response = await _currentRequestClient!.post(
-            Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
-            headers: headers,
-            body: body,
-          ).timeout(const Duration(seconds: 45));
-          DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
-          
-          _log('Bridge response: ${response.statusCode}');
-          
-          if (response.statusCode == 200) {
-            if (response.body.trim().isEmpty) {
-              throw Exception('Empty response from server');
+          try {
+            final jsonResponse = jsonDecode(response.body);
+            final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
+            if (content.toString().trim().isEmpty) {
+              throw Exception('No content in response');
             }
-            
-            try {
-              final jsonResponse = jsonDecode(response.body);
-              final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
-              if (content.toString().trim().isEmpty) {
-                throw Exception('No content in response');
-              }
-              return _cleanupAndReturn(content.toString());
-            } catch (jsonError) {
-              return _cleanupAndReturn(response.body);
-            }
-          } else {
-            throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
+            return _cleanupAndReturn(content.toString());
+          } catch (jsonError) {
+            return _cleanupAndReturn(response.body);
           }
         } else {
-          final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}');
-          final additionalHeaders = <String, String>{
-            if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
-          };
-          
-          final headers = await _getAuthenticatedHeaders(additionalHeaders: additionalHeaders);
-          
-          DebugService.instance.logHttp('GET $browseUrl - Direct request');
-          final response = await _currentRequestClient!.get(browseUrl, headers: headers).timeout(const Duration(seconds: 45));
-          DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
-          
-          _log('Bridge response: ${response.statusCode}');
-          
-          if (response.statusCode == 200) {
-            if (response.body.trim().isEmpty) {
-              throw Exception('Empty response from server');
-            }
-            
-            try {
-              final jsonResponse = jsonDecode(response.body);
-              final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
-              if (content.toString().trim().isEmpty) {
-                throw Exception('No content in response');
-              }
-              return _cleanupAndReturn(content.toString());
-            } catch (jsonError) {
-              return _cleanupAndReturn(response.body);
-            }
-          } else {
-            throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
-          }
+          throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
         }
       } catch (e) {
         _log('❌ Bridge fetch error (attempt ${attempt + 1}): $e');
@@ -745,7 +680,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
         <h2>Connection Error</h2>
         <p>$error</p>
         <button class="retry-button" onclick="location.reload()">Retry</button>
-        <div class="debug-info">Debug Info:\nCurrent URL: $_currentUrl\nBase URL: $_currentBaseUrl\nEncryption: $_encryptionEnabled</div>
+        <div class="debug-info">Debug Info:\nCurrent URL: $_currentUrl\nBase URL: $_currentBaseUrl\nEncryption: Always Enabled</div>
       </div>
     </body>
     </html>
@@ -782,23 +717,12 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
                     ),
                     child: Row(
                       children: [
-                        GestureDetector(
-                          onTap: _toggleEncryption,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: AnimatedBuilder(
-                              animation: _lockAnimation,
-                              builder: (context, child) {
-                                return Icon(
-                                  _encryptionEnabled ? Icons.lock : Icons.lock_open,
-                                  size: 20,
-                                  color: ColorTween(
-                                    begin: Colors.grey,
-                                    end: Colors.green,
-                                  ).evaluate(_lockAnimation),
-                                );
-                              },
-                            ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          child: const Icon(
+                            Icons.lock,
+                            size: 20,
+                            color: Colors.green,
                           ),
                         ),
                         Expanded(
@@ -875,18 +799,18 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     }
 
     return InAppWebView(
-      initialOptions: InAppWebViewGroupOptions(
-        crossPlatform: InAppWebViewOptions(
-          userAgent: appUserAgent,
-          javaScriptEnabled: true,
-          transparentBackground: true,
-          supportZoom: true,
-          cacheEnabled: false,
-        ),
-        ios: IOSInAppWebViewOptions(
-          allowsInlineMediaPlayback: true,
-          allowsBackForwardNavigationGestures: true,
-        ),
+      initialSettings: InAppWebViewSettings(
+        userAgent: appUserAgent,
+        javaScriptEnabled: true,
+        transparentBackground: true,
+        supportZoom: true,
+        cacheEnabled: false,
+        // iOS specific settings
+        allowsInlineMediaPlayback: true,
+        allowsBackForwardNavigationGestures: true,
+        // Better navigation handling
+        useShouldOverrideUrlLoading: true,
+        useOnLoadResource: true,
       ),
       onWebViewCreated: (controller) {
         _webViewController = controller;
@@ -895,13 +819,19 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
         controller.addJavaScriptHandler(
           handlerName: 'linkClicked',
           callback: (args) {
+            _log('🔗 JavaScript handler called with args: $args');
             if (args.isNotEmpty) {
               final url = args[0].toString();
               _log('🔗 JavaScript link click detected: $url');
               DebugService.instance.logBrowser('Link click from JS: $url');
-              _loadPage(url);
+              
+              // Schedule the load for next frame to avoid potential issues
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _log('🔄 Processing JavaScript link click: $url');
+                _loadPage(url);
+              });
             } else {
-              _log('⚠️ JavaScript link click with no URL');
+              _log('❌ JavaScript handler called with no arguments');
             }
           },
         );
@@ -929,10 +859,12 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
           await controller.evaluateJavascript(source: '''
           (function() {
             console.log('🚀 I2P Browser link handler starting...');
+            console.log('🔍 Checking flutter_inappwebview availability:', typeof window.flutter_inappwebview);
             
             // Remove any existing listeners
             if (window.i2pLinkHandler) {
               document.removeEventListener('click', window.i2pLinkHandler, true);
+              console.log('🧹 Removed existing link handler');
             }
             
             // Create comprehensive link click handler
@@ -974,15 +906,37 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
                   return;
                 }
                 
-                console.log('Preventing default and calling Flutter handler');
+                console.log('🚫 Preventing default and calling Flutter handler');
                 e.preventDefault();
                 e.stopPropagation();
+                e.stopImmediatePropagation();
                 
+                // Multiple attempts to call the handler
+                var handlerCalled = false;
+                
+                // Method 1: Direct handler call
                 try {
-                  window.flutter_inappwebview.callHandler('linkClicked', target.href);
-                  console.log('Successfully called Flutter handler with:', target.href);
+                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
+                    window.flutter_inappwebview.callHandler('linkClicked', target.href);
+                    console.log('✅ Successfully called Flutter handler with:', target.href);
+                    handlerCalled = true;
+                  } else {
+                    console.log('❌ flutter_inappwebview not available');
+                  }
                 } catch (err) {
-                  console.error('Error calling Flutter handler:', err);
+                  console.error('❌ Error calling Flutter handler:', err);
+                }
+                
+                // Method 2: Fallback using window.location (will trigger shouldOverrideUrlLoading)
+                if (!handlerCalled) {
+                  console.log('🔄 Fallback: Using window.location navigation');
+                  setTimeout(function() {
+                    try {
+                      window.location.href = target.href;
+                    } catch (err) {
+                      console.error('❌ Fallback navigation failed:', err);
+                    }
+                  }, 100);
                 }
                 
                 return false;
@@ -1023,8 +977,13 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
         final uri = navigationAction.request.url!;
         final url = uri.toString();
         final navigationType = navigationAction.navigationType;
+        final isUserInitiated = navigationAction.isForMainFrame;
         
-        _log('🧭 Navigation attempt: $url (type: $navigationType)');
+        _log('🧭 Navigation attempt: $url');
+        _log('   - Type: $navigationType');
+        _log('   - Main frame: $isUserInitiated');
+        _log('   - Current URL: $_currentUrl');
+        _log('   - Loading state: $_isLoading');
         DebugService.instance.logBrowser('Navigation: $url (type: $navigationType)');
         
         // Allow data URLs and about:blank - these are needed for our loadData calls
@@ -1033,11 +992,31 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
           return NavigationActionPolicy.ALLOW;
         }
         
+        // Skip navigation if we're already loading this URL
+        if (_isLoading && url == 'http://$_currentUrl') {
+          _log('⏭️ Already loading this URL, allowing WebView navigation');
+          return NavigationActionPolicy.ALLOW;
+        }
+        
         // For HTTP/HTTPS URLs, intercept and load through our bridge
         if (url.startsWith('http://') || url.startsWith('https://')) {
           _log('🚫 Intercepting HTTP navigation to load through bridge: $url');
+          _log('🔄 Current loading state: $_isLoading');
+          _log('🔄 Current request client exists: ${_currentRequestClient != null}');
           DebugService.instance.logBrowser('Intercepting navigation: $url');
-          _loadPage(url);
+          
+          // Don't intercept if this is the exact same URL we're currently processing
+          if (_currentBaseUrl == url && _isLoading) {
+            _log('⏭️ Same URL already in progress, allowing');
+            return NavigationActionPolicy.ALLOW;
+          }
+          
+          // Schedule the load for next frame to avoid potential race conditions
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _log('🚀 Triggering _loadPage from shouldOverrideUrlLoading: $url');
+            _loadPage(url);
+          });
+          
           return NavigationActionPolicy.CANCEL;
         }
         
@@ -1059,9 +1038,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
           const SizedBox(height: 20),
           Icon(Icons.language, size: 80, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
           const SizedBox(height: 16),
-          Text(
-            _encryptionEnabled ? '🔒 Privacy Mode Active' : '🔓 Standard Mode',
-            style: TextStyle(fontSize: 16, color: _encryptionEnabled ? Colors.green : Colors.orange),
+          const Text(
+            '🔒 Secure I2P Browsing',
+            style: TextStyle(fontSize: 16, color: Colors.green),
           ),
           const SizedBox(height: 24),
           const Text('Popular I2P Sites', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500)),

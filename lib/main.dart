@@ -69,7 +69,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   }
 
   static const List<String> _moduleTitles = <String>[
-    'HTTP Browser',
+    'I2P Browser',
     'IRC Chat',
     'I2P Mail',
     'Image Upload',
