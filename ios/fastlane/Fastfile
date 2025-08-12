@@ -11,6 +11,16 @@ platform :ios do
       readonly: true
     )
     
+    # Build Flutter app with API key
+    api_key = ENV["I2P_BRIDGE_API_KEY"]
+    if api_key.nil? || api_key.empty?
+      UI.user_error!("I2P_BRIDGE_API_KEY environment variable is required")
+    end
+    
+    Dir.chdir("../") do
+      sh("flutter", "build", "ios", "--release", "--dart-define=I2P_BRIDGE_API_KEY=#{api_key}")
+    end
+    
     # Build your app with specific codesigning settings
     build_app(
       workspace: "Runner.xcworkspace",

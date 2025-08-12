@@ -21,7 +21,7 @@ jobs:
           echo "Runner workspace: $GITHUB_WORKSPACE"
       
       - run: flutter pub get
-      - run: flutter build ios --no-codesign
+      - run: flutter build ios --no-codesign --dart-define=I2P_BRIDGE_API_KEY=${{ secrets.I2P_BRIDGE_API_KEY }}
   build-android:
     runs-on: [self-hosted, linux]
     steps:
@@ -47,5 +47,5 @@ jobs:
             ${{ runner.os }}-gradle
 
       - run: flutter pub get
-      - run: flutter build apk --debug
+      - run: flutter build apk --debug --dart-define=I2P_BRIDGE_API_KEY=${{ secrets.I2P_BRIDGE_API_KEY }}
 
