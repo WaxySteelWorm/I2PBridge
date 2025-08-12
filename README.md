@@ -20,6 +20,4 @@ TODO
 
 FIX POPULAR I2P LIST
 
-DROP.I2P Color
 
-IRC still not popping out to initial channel
