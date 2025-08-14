@@ -212,8 +212,9 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         request.fields['expiry'] = _selectedExpiry;
 
         // Add auth header
-        final auth = await AuthService.instance.authHeader();
-        request.headers.addAll(auth);
+        final authService = Provider.of<AuthService>(context, listen: false);
+        await authService.ensureAuthenticated();
+        request.headers.addAll(authService.getAuthHeaders());
 
         // Set timeout and send with pinned client
         var streamedResponse = await _httpClient.send(request).timeout(

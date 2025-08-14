@@ -19,7 +19,7 @@ class EnhancedBrowserPage extends StatefulWidget {
   State<EnhancedBrowserPage> createState() => _EnhancedBrowserPageState();
 }
 
-class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
+class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerProviderStateMixin {
   final TextEditingController _urlController = TextEditingController();
   final EncryptionService _encryption = EncryptionService();
   
@@ -31,7 +31,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
   
   final List<String> _history = [];
   int _historyIndex = -1;
+  bool _encryptionEnabled = true;
   
+  late AnimationController _lockAnimationController;
+  late Animation<double> _lockAnimation;
   
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   final http.Client _httpClient = http.Client();
@@ -45,6 +48,14 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
     super.initState();
     _encryption.initialize();
     
+    _lockAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _lockAnimation = CurvedAnimation(
+      parent: _lockAnimationController,
+      curve: Curves.easeInOut,
+    );
     
     if (widget.initialUrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadPage(widget.initialUrl!));
@@ -54,6 +65,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
   @override
   void dispose() {
     _httpClient.close();
+    _lockAnimationController.dispose();
     super.dispose();
   }
   
@@ -310,8 +322,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
             if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           };
 
-          final auth = await AuthService.instance.authHeader();
-          headers.addAll(auth);
+          final authService = Provider.of<AuthService>(context, listen: false);
+          await authService.ensureAuthenticated();
+          headers.addAll(authService.getAuthHeaders());
           
           final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
           
@@ -352,8 +365,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
           };
-          final auth = await AuthService.instance.authHeader();
-          headers.addAll(auth);
+          final authService = Provider.of<AuthService>(context, listen: false);
+          await authService.ensureAuthenticated();
+          headers.addAll(authService.getAuthHeaders());
           if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
           
           DebugService.instance.logHttp('GET $browseUrl - Direct request');
@@ -361,18 +375,20 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
           DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
           
           _log('Bridge response: ${response.statusCode}');          
-          try {
-            final jsonResponse = jsonDecode(response.body);
-            final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
-            if (content.toString().trim().isEmpty) {
-              throw Exception('No content in response');
+          if (response.statusCode == 200) {
+            try {
+              final jsonResponse = jsonDecode(response.body);
+              final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
+              if (content.toString().trim().isEmpty) {
+                throw Exception('No content in response');
+              }
+              return _cleanupAndReturn(content.toString());
+            } catch (jsonError) {
+              return _cleanupAndReturn(response.body);
             }
-            return _cleanupAndReturn(content.toString());
-          } catch (jsonError) {
-            return _cleanupAndReturn(response.body);
+          } else {
+            throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
           }
-        } else {
-          throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
         }
       } catch (e) {
         _log('❌ Bridge fetch error (attempt ${attempt + 1}): $e');
