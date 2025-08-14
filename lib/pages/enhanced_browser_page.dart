@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../data/popular_sites.dart';
 import '../services/encryption_service.dart';
 import '../services/debug_service.dart';
+import '../services/auth_service.dart';
 
 class EnhancedBrowserPage extends StatefulWidget {
   final String? initialUrl;
@@ -23,7 +24,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
   
   InAppWebViewController? _webViewController;
   bool _isLoading = false;
-  bool _encryptionEnabled = true;
+  final bool _encryptionEnabled = true; // lock is always enabled per security policy
   double _progress = 0;
   String _currentUrl = '';
   String _currentBaseUrl = '';
@@ -98,33 +99,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     }
   }
 
-  void _toggleEncryption() {
-    setState(() {
-      _encryptionEnabled = !_encryptionEnabled;
-    });
-    
-    if (_encryptionEnabled) {
-      _lockAnimationController.forward();
-    } else {
-      _lockAnimationController.reverse();
-    }
-    
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            Icon(_encryptionEnabled ? Icons.lock : Icons.lock_open, color: Colors.white, size: 20),
-            const SizedBox(width: 8),
-            Text(_encryptionEnabled ? 'Privacy Mode enabled' : 'Privacy Mode disabled'),
-          ],
-        ),
-        backgroundColor: _encryptionEnabled ? Colors.green : Colors.orange,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        duration: const Duration(seconds: 2),
-      ),
-    );
-  }
+  void _toggleEncryption() {}
 
   Future<void> _goBack() async {
     if (_webViewController != null) {
@@ -295,6 +270,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
             'Connection': 'keep-alive',
             if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           };
+
+          final auth = await AuthService.instance.authHeader();
+          headers.addAll(auth);
           
           final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
           
@@ -335,6 +313,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
           };
+          final auth = await AuthService.instance.authHeader();
+          headers.addAll(auth);
           if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
           
           DebugService.instance.logHttp('GET $browseUrl - Direct request');
@@ -721,103 +701,65 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
       padding: const EdgeInsets.all(16.0),
       child: Column(
         children: [
-          Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardTheme.color,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: _canGoBack ? _goBack : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_forward),
-                  onPressed: _canGoForward ? _goForward : null,
-                ),
-                Expanded(
-                  child: Container(
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).scaffoldBackgroundColor,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        GestureDetector(
-                          onTap: _toggleEncryption,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                            child: AnimatedBuilder(
-                              animation: _lockAnimation,
-                              builder: (context, child) {
-                                return Icon(
-                                  _encryptionEnabled ? Icons.lock : Icons.lock_open,
-                                  size: 20,
-                                  color: ColorTween(
-                                    begin: Colors.grey,
-                                    end: Colors.green,
-                                  ).evaluate(_lockAnimation),
-                                );
-                              },
-                            ),
-                          ),
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _canGoBack ? _goBack : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward),
+                onPressed: _canGoForward ? _goForward : null,
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SearchBar(
+                      hintText: 'Enter address or search',
+                      leading: GestureDetector(
+                        onTap: () {},
+                        child: AnimatedBuilder(
+                          animation: _lockAnimation,
+                          builder: (context, child) {
+                            return Icon(
+                              _encryptionEnabled ? Icons.lock : Icons.lock_open,
+                              color: ColorTween(begin: Colors.grey, end: Colors.green).evaluate(_lockAnimation),
+                            );
+                          },
                         ),
-                        Expanded(
-                          child: TextField(
-                            controller: _urlController,
-                            decoration: const InputDecoration(
-                              hintText: 'Enter I2P address',
-                              border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(horizontal: 8),
-                            ),
-                            style: const TextStyle(fontSize: 16),
-                            onSubmitted: (value) => _loadPage(value),
-                          ),
+                      ),
+                      trailing: [
+                        IconButton(
+                          icon: Icon(_isLoading ? Icons.stop : Icons.refresh),
+                          onPressed: _isLoading ? _stop : _refresh,
+                          tooltip: _isLoading ? 'Stop' : 'Refresh',
                         ),
                       ],
+                      onSubmitted: (value) => _loadPage(value),
+                      controller: _urlController,
                     ),
-                  ),
+                    if (_progress > 0 && _progress < 1)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: LinearProgressIndicator(
+                          value: _progress,
+                          backgroundColor: Colors.white10,
+                          valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).colorScheme.primary),
+                        ),
+                      ),
+                  ],
                 ),
-                IconButton(
-                  icon: Icon(_isLoading ? Icons.stop : Icons.refresh),
-                  onPressed: _isLoading ? _stop : _refresh,
-                  tooltip: _isLoading ? 'Stop' : 'Refresh',
-                ),
-              ],
-            ),
-          ),
-          
-          const SizedBox(height: 12),
-          
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _isLoading ? null : () => _loadPage(_urlController.text),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 18),
               ),
-              child: _isLoading
-                ? const SizedBox(
-                    height: 24,
-                    width: 24,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                  )
-                : const Text('Go'),
-            ),
+            ],
           ),
-          
-          const SizedBox(height: 16),
-          
-          if (_progress > 0 && _progress < 1)
-            LinearProgressIndicator(
-              value: _progress,
-              backgroundColor: Colors.grey[300],
-              valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
-            ),
-          
+
+          const SizedBox(height: 12),
+
+          // Removed quick-launch chips per feedback
+
+          const SizedBox(height: 12),
+
           Expanded(
             child: Card(
               margin: EdgeInsets.zero,
@@ -834,7 +776,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
 
   Widget _buildWebView() {
     if (_history.isEmpty && widget.initialUrl == null) {
-      return _buildPopularSitesList();
+      return _buildLanding();
     }
 
     return InAppWebView(
@@ -1015,52 +957,28 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with SingleTi
     );
   }
 
-  Widget _buildPopularSitesList() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          const SizedBox(height: 20),
-          Icon(Icons.language, size: 80, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
-          const SizedBox(height: 16),
-          Text(
-            _encryptionEnabled ? '🔒 Privacy Mode Active' : '🔓 Standard Mode',
-            style: TextStyle(fontSize: 16, color: _encryptionEnabled ? Colors.green : Colors.orange),
-          ),
-          const SizedBox(height: 24),
-          const Text('Popular I2P Sites', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500)),
-          const SizedBox(height: 16),
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: popularSites.length,
-            itemBuilder: (context, index) {
-              final site = popularSites[index];
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.all(16),
-                  leading: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                    child: Text(
-                      site.name[0].toUpperCase(),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  title: Text(site.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-                  subtitle: Text(site.description, style: const TextStyle(fontSize: 14)),
-                  trailing: Icon(Icons.arrow_forward_ios, size: 16, color: Theme.of(context).colorScheme.primary),
-                  onTap: () => _loadPage(site.url),
-                ),
-              );
-            },
-          ),
-        ],
+  Widget _buildLanding() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const SizedBox(height: 12),
+            const Text(
+              'Enter an I2P address or search above',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Privacy mode is enabled. Your requests are proxied through the bridge.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }

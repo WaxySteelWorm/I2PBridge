@@ -213,34 +213,55 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
                     ),
                   );
                 }
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2.0),
-                  child: RichText(
-                    text: TextSpan(
-                      style: DefaultTextStyle.of(context).style.copyWith(fontSize: 15),
-                      children: <TextSpan>[
-                        TextSpan(
-                          text: '${DateFormat('HH:mm').format(msg.timestamp)} ',
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                final isSelf = msg.sender == ircService.nickname;
+                final isAction = msg.sender.startsWith('* ');
+                final cleanSender = isAction ? msg.sender.substring(2) : msg.sender;
+                return Align(
+                  alignment: isSelf ? Alignment.centerRight : Alignment.centerLeft,
+                  child: Container
+                  (
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.8),
+                    decoration: BoxDecoration(
+                      color: isSelf ? Colors.blueAccent : Colors.grey.shade800,
+                      borderRadius: BorderRadius.only(
+                        topLeft: const Radius.circular(12),
+                        topRight: const Radius.circular(12),
+                        bottomLeft: Radius.circular(isSelf ? 12 : 4),
+                        bottomRight: Radius.circular(isSelf ? 4 : 12),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              cleanSender,
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: isSelf ? Colors.white70 : ircService.getUserColor(cleanSender),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              DateFormat('HH:mm').format(msg.timestamp),
+                              style: TextStyle(color: Colors.white60, fontSize: 10),
+                            ),
+                          ],
                         ),
-                        if (msg.sender.startsWith('* '))
-                          TextSpan(
-                            text: msg.sender + ' ' + msg.content,
-                            style: TextStyle(
-                              color: ircService.getUserColor(msg.sender.substring(2)),
-                              fontStyle: FontStyle.italic,
-                            ),
-                          )
-                        else ...[
-                          TextSpan(
-                            text: '<${msg.sender}> ',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: ircService.getUserColor(msg.sender),
-                            ),
+                        const SizedBox(height: 4),
+                        Text(
+                          isAction ? '_${msg.content}_' : msg.content,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontStyle: isAction ? FontStyle.italic : FontStyle.normal,
+                            fontSize: 15,
                           ),
-                          TextSpan(text: msg.content),
-                        ],
+                        ),
                       ],
                     ),
                   ),
