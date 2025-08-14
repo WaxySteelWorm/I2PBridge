@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 import '../assets/drop_logo.dart';
 import '../services/auth_service.dart';
 import '../services/debug_service.dart';
+import '../services/auth_service.dart';
 
 class UploadPage extends StatefulWidget {
   const UploadPage({super.key});
@@ -209,6 +210,10 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           request.fields['max_views'] = _maxViewsController.text;
         }
         request.fields['expiry'] = _selectedExpiry;
+
+        // Add auth header
+        final auth = await AuthService.instance.authHeader();
+        request.headers.addAll(auth);
 
         // Set timeout and send with pinned client
         var streamedResponse = await _httpClient.send(request).timeout(

@@ -130,6 +130,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
   }
 
 
+
   Future<void> _goBack() async {
     if (_webViewController != null) {
       if (await _webViewController!.canGoBack()) {
@@ -293,34 +294,73 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
         
         _log('Making encrypted request to bridge for: $fullUrl');
         
-        final sessionToken = _encryption.generateChannelId();
-        final encryptedUrl = _encryption.encryptUrl(fullUrl);
-        
-        final additionalHeaders = {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          'X-Session-Token': sessionToken,
-          'X-Privacy-Mode': 'enabled',
-          if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
-        };
-        
-        final headers = await _getAuthenticatedHeaders(additionalHeaders: additionalHeaders);
-        final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
-        
-        DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
-        final response = await _currentRequestClient!.post(
-          Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
-          headers: headers,
-          body: body,
-        ).timeout(const Duration(seconds: 45));
-        DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
-        
-        _log('Bridge response: ${response.statusCode}');
-        
-        if (response.statusCode == 200) {
-          if (response.body.trim().isEmpty) {
-            throw Exception('Empty response from server');
-          }
+        if (_encryptionEnabled) {
+          final sessionToken = _encryption.generateChannelId();
+          final encryptedUrl = _encryption.encryptUrl(fullUrl);
           
+          final headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Session-Token': sessionToken,
+            'X-Privacy-Mode': 'enabled',
+            'User-Agent': appUserAgent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
+          };
+
+          final auth = await AuthService.instance.authHeader();
+          headers.addAll(auth);
+          
+          final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
+          
+          DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
+          final response = await _currentRequestClient!.post(
+            Uri.parse('https://bridge.stormycloud.org/api/v1/browse'),
+            headers: headers,
+            body: body,
+          ).timeout(const Duration(seconds: 45));
+          DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
+          
+          _log('Bridge response: ${response.statusCode}');
+          
+          if (response.statusCode == 200) {
+            if (response.body.trim().isEmpty) {
+              throw Exception('Empty response from server');
+            }
+            
+            try {
+              final jsonResponse = jsonDecode(response.body);
+              final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
+              if (content.toString().trim().isEmpty) {
+                throw Exception('No content in response');
+              }
+              return _cleanupAndReturn(content.toString());
+            } catch (jsonError) {
+              return _cleanupAndReturn(response.body);
+            }
+          } else {
+            throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
+          }
+        } else {
+          final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}');
+          final headers = {
+            'User-Agent': appUserAgent,
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+          };
+          final auth = await AuthService.instance.authHeader();
+          headers.addAll(auth);
+          if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
+          
+          DebugService.instance.logHttp('GET $browseUrl - Direct request');
+          final response = await _currentRequestClient!.get(browseUrl, headers: headers).timeout(const Duration(seconds: 45));
+          DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
+          
+          _log('Bridge response: ${response.statusCode}');          
           try {
             final jsonResponse = jsonDecode(response.body);
             final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
@@ -693,92 +733,66 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
       padding: const EdgeInsets.all(16.0),
       child: Column(
         children: [
-          Container(
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardTheme.color,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.arrow_back),
-                  onPressed: _canGoBack ? _goBack : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.arrow_forward),
-                  onPressed: _canGoForward ? _goForward : null,
-                ),
-                Expanded(
-                  child: Container(
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).scaffoldBackgroundColor,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 12),
-                          child: const Icon(
-                            Icons.lock,
-                            size: 20,
-                            color: Colors.green,
-                          ),
+          Row(
+            children: [
+              IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: _canGoBack ? _goBack : null,
+              ),
+              IconButton(
+                icon: const Icon(Icons.arrow_forward),
+                onPressed: _canGoForward ? _goForward : null,
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SearchBar(
+                      hintText: 'Enter address or search',
+                      leading: GestureDetector(
+                        onTap: () {},
+                        child: AnimatedBuilder(
+                          animation: _lockAnimation,
+                          builder: (context, child) {
+                            return Icon(
+                              _encryptionEnabled ? Icons.lock : Icons.lock_open,
+                              color: ColorTween(begin: Colors.grey, end: Colors.green).evaluate(_lockAnimation),
+                            );
+                          },
+
                         ),
-                        Expanded(
-                          child: TextField(
-                            controller: _urlController,
-                            decoration: const InputDecoration(
-                              hintText: 'Enter I2P address',
-                              border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(horizontal: 8),
-                            ),
-                            style: const TextStyle(fontSize: 16),
-                            onSubmitted: (value) => _loadPage(value),
-                          ),
+                      ),
+                      trailing: [
+                        IconButton(
+                          icon: Icon(_isLoading ? Icons.stop : Icons.refresh),
+                          onPressed: _isLoading ? _stop : _refresh,
+                          tooltip: _isLoading ? 'Stop' : 'Refresh',
                         ),
                       ],
+                      onSubmitted: (value) => _loadPage(value),
+                      controller: _urlController,
                     ),
-                  ),
+                    if (_progress > 0 && _progress < 1)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8.0),
+                        child: LinearProgressIndicator(
+                          value: _progress,
+                          backgroundColor: Colors.white10,
+                          valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).colorScheme.primary),
+                        ),
+                      ),
+                  ],
                 ),
-                IconButton(
-                  icon: Icon(_isLoading ? Icons.stop : Icons.refresh),
-                  onPressed: _isLoading ? _stop : _refresh,
-                  tooltip: _isLoading ? 'Stop' : 'Refresh',
-                ),
-              ],
-            ),
-          ),
-          
-          const SizedBox(height: 12),
-          
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: _isLoading ? null : () => _loadPage(_urlController.text),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                textStyle: const TextStyle(fontSize: 18),
               ),
-              child: _isLoading
-                ? const SizedBox(
-                    height: 24,
-                    width: 24,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                  )
-                : const Text('Go'),
-            ),
+            ],
           ),
-          
-          const SizedBox(height: 16),
-          
-          if (_progress > 0 && _progress < 1)
-            LinearProgressIndicator(
-              value: _progress,
-              backgroundColor: Colors.grey[300],
-              valueColor: AlwaysStoppedAnimation<Color>(Theme.of(context).primaryColor),
-            ),
-          
+
+          const SizedBox(height: 12),
+
+          // Removed quick-launch chips per feedback
+
+          const SizedBox(height: 12),
+
           Expanded(
             child: Card(
               margin: EdgeInsets.zero,
@@ -795,7 +809,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
 
   Widget _buildWebView() {
     if (_history.isEmpty && widget.initialUrl == null) {
-      return _buildPopularSitesList();
+      return _buildLanding();
     }
 
     return InAppWebView(
@@ -1029,52 +1043,28 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
     );
   }
 
-  Widget _buildPopularSitesList() {
-    return SingleChildScrollView(
-      child: Column(
-        children: [
-          const SizedBox(height: 20),
-          Icon(Icons.language, size: 80, color: Theme.of(context).colorScheme.primary.withOpacity(0.5)),
-          const SizedBox(height: 16),
-          const Text(
-            '🔒 Secure I2P Browsing',
-            style: TextStyle(fontSize: 16, color: Colors.green),
-          ),
-          const SizedBox(height: 24),
-          const Text('Popular I2P Sites', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w500)),
-          const SizedBox(height: 16),
-          ListView.builder(
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: popularSites.length,
-            itemBuilder: (context, index) {
-              final site = popularSites[index];
-              return Card(
-                margin: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  contentPadding: const EdgeInsets.all(16),
-                  leading: CircleAvatar(
-                    radius: 24,
-                    backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
-                    child: Text(
-                      site.name[0].toUpperCase(),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.primary,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                      ),
-                    ),
-                  ),
-                  title: Text(site.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
-                  subtitle: Text(site.description, style: const TextStyle(fontSize: 14)),
-                  trailing: Icon(Icons.arrow_forward_ios, size: 16, color: Theme.of(context).colorScheme.primary),
-                  onTap: () => _loadPage(site.url),
-                ),
-              );
-            },
-          ),
-        ],
+  Widget _buildLanding() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            const SizedBox(height: 12),
+            const Text(
+              'Enter an I2P address or search above',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Privacy mode is enabled. Your requests are proxied through the bridge.',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }

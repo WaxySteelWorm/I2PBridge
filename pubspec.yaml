@@ -43,6 +43,8 @@ dependencies:
   crypto: ^3.0.3
   flutter_inappwebview: ^6.0.0
   flutter_svg: ^2.0.9
+  google_fonts: ^6.2.1
+  shimmer: ^3.0.0
 
 
   # The following adds the Cupertino Icons font to your application.

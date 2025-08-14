@@ -280,6 +280,7 @@ class Pop3MailService with ChangeNotifier {
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'start': 1,
@@ -335,6 +336,7 @@ class Pop3MailService with ChangeNotifier {
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'start': 1,
@@ -433,6 +435,7 @@ Future<void> _prefetchRecentMessages() async {
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
@@ -514,6 +517,7 @@ Future<void> _prefetchRecentMessages() async {
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
@@ -632,6 +636,7 @@ Future<void> _prefetchRecentMessages() async {
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/send'),
         headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'emailData': encryptedEmailData,

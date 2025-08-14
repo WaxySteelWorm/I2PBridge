@@ -8,7 +8,11 @@ plugins {
 android {
     namespace = "com.example.i2p_bridge"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    ndkVersion = "27.0.12077973"
+
+    buildFeatures {
+        buildConfig = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -29,7 +33,7 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
-
+    
     buildTypes {
         release {
             // TODO: Add your own signing config for the release build.
