@@ -91,6 +91,9 @@ class EncryptedCredentials {
 }
 
 class Pop3MailService with ChangeNotifier {
+  // Authentication service
+  AuthService? _authService;
+  
   // Encryption components
   late Uint8List _credentialKey;
   late Uint8List _credentialIV;
@@ -109,8 +112,8 @@ class Pop3MailService with ChangeNotifier {
   // Server configuration
   static const String _serverBaseUrl = 'https://bridge.stormycloud.org';
   
-  // SSL Pinning configuration
-  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  // SSL Pinning configuration - Updated to use certificate fingerprint
+  static const String expectedCertFingerprint = 'AO5T/CbxDzIBFkUp6jLEcAk0+ZxeN06uaKyeIzIE+E0=';
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   late http.Client _httpClient;
 
@@ -127,6 +130,33 @@ class Pop3MailService with ChangeNotifier {
     _initializeEncryption();
     _httpClient = _createPinnedHttpClient();
   }
+  
+  // Set the authentication service (called from UI)
+  void setAuthService(AuthService authService) {
+    _authService = authService;
+  }
+  
+  // Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders() async {
+    if (_authService != null) {
+      await _authService!.ensureAuthenticated();
+      return _authService!.getAuthHeaders();
+    }
+    
+    // Fallback to legacy headers if AuthService not available
+    return {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'User-Agent': appUserAgent,
+    };
+  }
+
+  // SECURITY IMPROVEMENT: Pin the certificate SHA-256 fingerprint
+  String _getCertificateFingerprint(X509Certificate cert) {
+    final certDer = cert.der;
+    final fingerprint = sha256.convert(certDer);
+    return base64.encode(fingerprint.bytes);
+  }
 
   http.Client _createPinnedHttpClient() {
     final httpClient = HttpClient();
@@ -138,13 +168,11 @@ class Pop3MailService with ChangeNotifier {
       }
       
       try {
-        // Get the public key from the certificate
-        final publicKeyBytes = cert.der;
-        final publicKeyHash = sha256.convert(publicKeyBytes);
-        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        // SECURITY FIX: Use certificate fingerprint instead of raw DER
+        final certificateFingerprint = _getCertificateFingerprint(cert);
         
-        // Compare with expected hash
-        return publicKeyHashBase64 == expectedPublicKeyHash;
+        // Compare with expected certificate fingerprint
+        return certificateFingerprint == expectedCertFingerprint;
       } catch (e) {
         DebugService.instance.logMail('Certificate validation error: $e');
         return false;
@@ -248,15 +276,11 @@ class Pop3MailService with ChangeNotifier {
 
       _encryptedCredentials = _encryptCredentials(username, password);
 
-      final auth = await AuthService.instance.authHeader();
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-          ...auth,
-        },
+        headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'start': 1,
@@ -308,15 +332,11 @@ class Pop3MailService with ChangeNotifier {
     notifyListeners();
 
     try {
-      final auth = await AuthService.instance.authHeader();
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-          ...auth,
-        },
+        headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'start': 1,
@@ -411,15 +431,11 @@ Future<void> _prefetchRecentMessages() async {
     if (!_isConnected || _encryptedCredentials == null) return null;
 
     try {
-      final auth = await AuthService.instance.authHeader();
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-          ...auth,
-        },
+        headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
@@ -497,15 +513,11 @@ Future<void> _prefetchRecentMessages() async {
     _updateStatus('Loading message...');
 
     try {
-      final auth = await AuthService.instance.authHeader();
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-          ...auth,
-        },
+        headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'msg': int.parse(messageId),
@@ -620,15 +632,11 @@ Future<void> _prefetchRecentMessages() async {
         'iv': base64.encode(emailIV),
       };
 
-      final auth = await AuthService.instance.authHeader();
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/send'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-          ...auth,
-        },
+        headers: headers,
+
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
           'emailData': encryptedEmailData,

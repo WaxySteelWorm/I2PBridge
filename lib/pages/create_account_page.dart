@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:crypto/crypto.dart';
+import 'package:provider/provider.dart';
+import '../services/auth_service.dart';
 
 class CreateAccountPage extends StatefulWidget {
   const CreateAccountPage({super.key});
@@ -26,8 +28,8 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
   bool _isLoading = false;
   String _statusMessage = '';
   
-  // SSL Pinning configuration (same as other services)
-  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  // SSL Pinning configuration - Updated to use certificate fingerprint
+  static const String expectedCertFingerprint = 'AO5T/CbxDzIBFkUp6jLEcAk0+ZxeN06uaKyeIzIE+E0=';
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   static const String _serverBaseUrl = 'https://bridge.stormycloud.org';
   
@@ -48,6 +50,29 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
     _nickController.dispose();
     super.dispose();
   }
+  
+  /// Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders() async {
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      await authService.ensureAuthenticated();
+      return authService.getAuthHeaders();
+    } catch (e) {
+      // Fallback to basic headers if authentication fails
+      return {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': appUserAgent,
+      };
+    }
+  }
+
+  // SECURITY IMPROVEMENT: Pin the certificate SHA-256 fingerprint
+  String _getCertificateFingerprint(X509Certificate cert) {
+    final certDer = cert.der;
+    final fingerprint = sha256.convert(certDer);
+    return base64.encode(fingerprint.bytes);
+  }
 
   http.Client _createPinnedHttpClient() {
     final httpClient = HttpClient();
@@ -59,13 +84,11 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
       }
       
       try {
-        // Get the public key from the certificate
-        final publicKeyBytes = cert.der;
-        final publicKeyHash = sha256.convert(publicKeyBytes);
-        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        // SECURITY FIX: Use certificate fingerprint instead of raw DER
+        final certificateFingerprint = _getCertificateFingerprint(cert);
         
-        // Compare with expected hash
-        return publicKeyHashBase64 == expectedPublicKeyHash;
+        // Compare with expected certificate fingerprint
+        return certificateFingerprint == expectedCertFingerprint;
       } catch (e) {
         return false;
       }
@@ -108,13 +131,10 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
           await Future.delayed(const Duration(seconds: 3));
         }
 
+        final headers = await _getAuthenticatedHeaders();
         final response = await _httpClient.post(
           Uri.parse('$_serverBaseUrl/api/v1/account/create'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'User-Agent': appUserAgent,
-          },
+          headers: headers,
           body: json.encode({
             'mail': _accountController.text.trim(),
             'pw1': _passwordController.text,

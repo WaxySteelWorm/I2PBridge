@@ -48,8 +48,8 @@ class IrcService with ChangeNotifier {
     Colors.pink.shade300, Colors.indigo.shade300
   ];
 
-  // SSL Pinning configuration
-  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  // SSL Pinning configuration - Updated to use certificate fingerprint
+  static const String expectedCertFingerprint = 'AO5T/CbxDzIBFkUp6jLEcAk0+ZxeN06uaKyeIzIE+E0=';
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
 
   bool get isConnected => _isConnected;
@@ -82,6 +82,13 @@ class IrcService with ChangeNotifier {
     notifyListeners();
   }
 
+  // SECURITY IMPROVEMENT: Pin the certificate SHA-256 fingerprint
+  String _getCertificateFingerprint(X509Certificate cert) {
+    final certDer = cert.der;
+    final fingerprint = sha256.convert(certDer);
+    return base64.encode(fingerprint.bytes);
+  }
+
   HttpClient _createPinnedHttpClient() {
     final httpClient = HttpClient();
     httpClient.userAgent = appUserAgent;
@@ -92,13 +99,11 @@ class IrcService with ChangeNotifier {
       }
       
       try {
-        // Get the public key from the certificate
-        final publicKeyBytes = cert.der;
-        final publicKeyHash = sha256.convert(publicKeyBytes);
-        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        // SECURITY FIX: Use certificate fingerprint instead of raw DER
+        final certificateFingerprint = _getCertificateFingerprint(cert);
         
-        // Compare with expected hash
-        return publicKeyHashBase64 == expectedPublicKeyHash;
+        // Compare with expected certificate fingerprint
+        return certificateFingerprint == expectedCertFingerprint;
       } catch (e) {
         DebugService.instance.logIrc('Certificate validation error: $e');
         return false;

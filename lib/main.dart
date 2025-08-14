@@ -27,6 +27,7 @@ void main(List<String> args) {
   runApp(
     MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
       providers: [
+        ChangeNotifierProvider(create: (context) => AuthService()),
         ChangeNotifierProvider(create: (context) => IrcService()),
         ChangeNotifierProvider(create: (context) => Pop3MailService()),  // Add this line
       ],
@@ -74,7 +75,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   }
 
   static const List<String> _moduleTitles = <String>[
-    'HTTP Browser',
+    'I2P Browser',
     'IRC Chat',
     'I2P Mail',
     'Image Upload',
