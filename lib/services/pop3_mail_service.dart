@@ -13,6 +13,7 @@ import 'package:crypto/crypto.dart';
 import 'package:pointycastle/export.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'debug_service.dart';
+import 'auth_service.dart';
 
 
 class EmailMessage {
@@ -247,12 +248,14 @@ class Pop3MailService with ChangeNotifier {
 
       _encryptedCredentials = _encryptCredentials(username, password);
 
+      final auth = await AuthService.instance.authHeader();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'User-Agent': appUserAgent,
+          ...auth,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -305,12 +308,14 @@ class Pop3MailService with ChangeNotifier {
     notifyListeners();
 
     try {
+      final auth = await AuthService.instance.authHeader();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/headers'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'User-Agent': appUserAgent,
+          ...auth,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -406,12 +411,14 @@ Future<void> _prefetchRecentMessages() async {
     if (!_isConnected || _encryptedCredentials == null) return null;
 
     try {
+      final auth = await AuthService.instance.authHeader();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'User-Agent': appUserAgent,
+          ...auth,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -490,12 +497,14 @@ Future<void> _prefetchRecentMessages() async {
     _updateStatus('Loading message...');
 
     try {
+      final auth = await AuthService.instance.authHeader();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/parsed'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'User-Agent': appUserAgent,
+          ...auth,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
@@ -611,12 +620,14 @@ Future<void> _prefetchRecentMessages() async {
         'iv': base64.encode(emailIV),
       };
 
+      final auth = await AuthService.instance.authHeader();
       final response = await _httpClient.post(
         Uri.parse('$_serverBaseUrl/api/v1/mail/send'),
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
           'User-Agent': appUserAgent,
+          ...auth,
         },
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
