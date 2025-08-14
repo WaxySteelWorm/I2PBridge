@@ -825,11 +825,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
               _log('🔗 JavaScript link click detected: $url');
               DebugService.instance.logBrowser('Link click from JS: $url');
               
-              // Schedule the load for next frame to avoid potential issues
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _log('🔄 Processing JavaScript link click: $url');
-                _loadPage(url);
-              });
+              // Call _loadPage directly - no need for postFrameCallback
+              _log('🔄 Processing JavaScript link click: $url');
+              _loadPage(url);
             } else {
               _log('❌ JavaScript handler called with no arguments');
             }
