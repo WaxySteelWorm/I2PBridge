@@ -7,14 +7,11 @@ from typing import Any, Dict, List, Optional
 
 # Lazy import androguard to allow the script to show a helpful error if missing
 try:
-	from androguard.core.bytecodes.apk import APK
+	from androguard.core.bytecodes.apk import APK  # type: ignore
+	ANDROGUARD_AVAILABLE = True
 except Exception as e:
-	print(json.dumps({
-		"ok": False,
-		"error": "Androguard not installed or failed to import",
-		"detail": str(e)
-	}))
-	sys.exit(1)
+	ANDROGUARD_AVAILABLE = False
+	ANDROGUARD_IMPORT_ERROR = str(e)
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
@@ -33,7 +30,7 @@ def get_attr(elem, name: str) -> Optional[str]:
 	return elem.get(ANDROID_NS + name)
 
 
-def parse_manifest(apk: APK) -> Dict[str, Any]:
+def parse_manifest(apk) -> Dict[str, Any]:
 	# Parse AXML to standard XML and extract attributes in a namespace-aware way
 	xml_bytes = apk.get_android_manifest_axml().get_xml()
 	try:
@@ -112,7 +109,7 @@ def parse_manifest(apk: APK) -> Dict[str, Any]:
 	return result
 
 
-def get_signing_info(apk: APK) -> Dict[str, Any]:
+def get_signing_info(apk) -> Dict[str, Any]:
 	info: Dict[str, Any] = {"signers": []}
 	try:
 		# Try v2/v3 first, then v1 (JAR)
@@ -165,6 +162,62 @@ def main() -> int:
 		result["file_path"] = apk_path
 		result["file_size_bytes"] = os.path.getsize(apk_path)
 		result["sha256"] = compute_sha256(apk_path)
+
+		if not ANDROGUARD_AVAILABLE:
+			# Fallback: try apkutils2 to parse manifest and permissions
+			try:
+				from apkutils2 import APK as APKU  # type: ignore
+				apku = APKU(apk_path)
+				manifest = apku.get_manifest()
+				result["badging"] = {
+					"package_name": manifest.get("@package"),
+					"version_name": manifest.get("@android:versionName"),
+					"version_code": manifest.get("@android:versionCode"),
+					"min_sdk": (manifest.get("uses-sdk") or {}).get("@android:minSdkVersion"),
+					"target_sdk": (manifest.get("uses-sdk") or {}).get("@android:targetSdkVersion"),
+				}
+				app = manifest.get("application") or {}
+				result["manifest"] = {
+					"package_name": manifest.get("@package"),
+					"version_code": manifest.get("@android:versionCode"),
+					"version_name": manifest.get("@android:versionName"),
+					"min_sdk": (manifest.get("uses-sdk") or {}).get("@android:minSdkVersion"),
+					"target_sdk": (manifest.get("uses-sdk") or {}).get("@android:targetSdkVersion"),
+					"application": {
+						"debuggable": (app.get("@android:debuggable") == "true"),
+						"allowBackup": app.get("@android:allowBackup"),
+						"usesCleartextTraffic": app.get("@android:usesCleartextTraffic"),
+						"networkSecurityConfig": app.get("@android:networkSecurityConfig"),
+					}
+				}
+				perms = []
+				for p in (manifest.get('uses-permission') or []):
+					name = p.get('@android:name') or p.get('@name')
+					if name:
+						perms.append(name)
+				result["permissions_declared"] = sorted(set(perms))
+				# Heuristics
+				heuristics: List[Dict[str, Any]] = []
+				app_cfg = result.get("manifest", {}).get("application", {})
+				if app_cfg.get("debuggable", False):
+					heuristics.append({"id": "DBG001", "severity": "medium", "title": "Application is debuggable"})
+				allow_backup = app.get("@android:allowBackup")
+				if allow_backup is None or allow_backup == "true":
+					heuristics.append({"id": "BK001", "severity": "medium", "title": "allowBackup is enabled or unspecified (defaults true)"})
+				uct = app.get("@android:usesCleartextTraffic")
+				if uct is None:
+					heuristics.append({"id": "CL001", "severity": "info", "title": "usesCleartextTraffic not explicitly set"})
+				elif uct == "true":
+					heuristics.append({"id": "CL002", "severity": "high", "title": "Cleartext traffic is allowed for the application"})
+				if app.get("@android:networkSecurityConfig"):
+					heuristics.append({"id": "NSC001", "severity": "info", "title": f"Custom networkSecurityConfig present"})
+				result["heuristics"] = heuristics
+				print(json.dumps(result, indent=2))
+				return 0
+			except Exception as fe:
+				result["warning"] = f"Fallback manifest parse failed: {fe}"
+				print(json.dumps(result, indent=2))
+				return 0
 
 		apk = APK(apk_path)
 		result["badging"] = {
