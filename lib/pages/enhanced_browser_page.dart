@@ -21,6 +21,7 @@ class EnhancedBrowserPage extends StatefulWidget {
 
 class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerProviderStateMixin {
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
   final EncryptionService _encryption = EncryptionService();
   
   InAppWebViewController? _webViewController;
@@ -66,6 +67,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   void dispose() {
     _httpClient.close();
     _lockAnimationController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
   
@@ -203,10 +205,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
       return;
     }
     
-    // Ultra-simple URL processing
-    String cleanInput = url.trim();
-    String fullUrl = cleanInput.startsWith('http') ? cleanInput : 'http://$cleanInput';
-    String cleanUrl = cleanInput.replaceFirst(RegExp(r'^https?://'), '');
+    // Convert query text into search URL if needed
+    String fullUrl = _normalizeInputToUrl(url.trim());
+    String cleanUrl = fullUrl.replaceFirst(RegExp(r'^https?://'), '');
     
     _log('🌍 _loadPage START: $fullUrl');
     _log('   - Original input: $url');
@@ -282,6 +283,38 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     }
   }
 
+  // Determine whether input should be treated as a search and map to shinobi.i2p
+  String _normalizeInputToUrl(String input) {
+    final txt = input.trim();
+    if (txt.isEmpty) return 'http://';
+
+    bool looksLikeUrl = RegExp(r'^(https?://)').hasMatch(txt) ||
+        // has a dot in first token or a known tld like .i2p
+        RegExp(r'^[^\s/]+\.[^\s]+').hasMatch(txt) ||
+        txt.startsWith('localhost') || txt.startsWith('127.0.0.1');
+
+    // If it contains whitespace or no dot and not starting with a scheme, treat as search
+    final containsSpace = txt.contains(RegExp(r'\s'));
+    final isLikelySearch = !looksLikeUrl || containsSpace;
+
+    if (isLikelySearch) {
+      final q = Uri.encodeQueryComponent(txt);
+      final searchUrl = 'http://shinobi.i2p/search?query=$q';
+      _log('🔎 Treating input as search; redirecting to $searchUrl');
+      return searchUrl;
+    }
+
+    // Ensure scheme
+    return txt.startsWith('http') ? txt : 'http://$txt';
+  }
+
+  void _performSearch(String query) {
+    final q = query.trim();
+    if (q.isEmpty) return;
+    final url = 'http://shinobi.i2p/search?query=${Uri.encodeQueryComponent(q)}';
+    _loadPage(url);
+  }
+
   String _cleanupAndReturn(String content) {
     // Clean up the request client
     _currentRequestClient?.close();
@@ -325,6 +358,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           final authService = Provider.of<AuthService>(context, listen: false);
           await authService.ensureAuthenticated();
           headers.addAll(authService.getAuthHeaders());
+          // Ensure we POST form-encoded, do not let auth headers override this
+          headers['Content-Type'] = 'application/x-www-form-urlencoded';
           
           final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
           
@@ -788,6 +823,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                       onSubmitted: (value) => _loadPage(value),
                       controller: _urlController,
                     ),
+                    const SizedBox(height: 8),
                     if (_progress > 0 && _progress < 1)
                       Padding(
                         padding: const EdgeInsets.only(top: 8.0),
@@ -803,11 +839,12 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             ],
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
 
           // Removed quick-launch chips per feedback
+          // Landing content will be rendered inside the webview area when no history
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 6),
 
           Expanded(
             child: Card(
@@ -1060,27 +1097,113 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   Widget _buildLanding() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const SizedBox(height: 12),
-            const Text(
-              'Enter an I2P address or search above',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              textAlign: TextAlign.center,
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const SizedBox(height: 12),
+          // Search area inside card
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Search the I2P network',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  const SizedBox(height: 8),
+                  // Framed search to make it pop a bit more
+                  Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    padding: const EdgeInsets.all(4),
+                    child: SearchBar(
+                      hintText: 'Search shinobi.i2p',
+                      leading: const Icon(Icons.search),
+                      onSubmitted: _performSearch,
+                      controller: _searchController,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Type a query and press enter to search via shinobi.i2p, or paste any .i2p address in the bar above to browse directly.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              'Privacy mode is enabled. Your requests are proxied through the bridge.',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
-              textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 8),
+          // Popular sites
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Popular I2P sites', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final double cardPadding = 12;
+                      final double gap = 8;
+                      final double itemWidth = (constraints.maxWidth - cardPadding*2 - gap) / 2;
+                      return Wrap(
+                        spacing: gap,
+                        runSpacing: gap,
+                        children: [
+                          for (final site in popularSites.take(4))
+                            SizedBox(
+                              width: itemWidth,
+                              child: InkWell(
+                                onTap: () => _loadPage(site.url),
+                                borderRadius: BorderRadius.circular(10),
+                                child: Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: Colors.white12),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      const Icon(Icons.language, size: 18, color: Colors.blueAccent),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(site.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              site.description,
+                                              style: TextStyle(fontSize: 12, color: Colors.grey.shade500),
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 12),
+        ],
       ),
     );
   }
