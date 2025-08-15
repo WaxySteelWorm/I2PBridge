@@ -8,6 +8,9 @@ import '../data/popular_sites.dart';
 import '../services/encryption_service.dart';
 import '../services/debug_service.dart';
 import '../services/auth_service.dart';
+import 'package:http/io_client.dart';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
 
 class EnhancedBrowserPage extends StatefulWidget {
   final String? initialUrl;
@@ -37,8 +40,34 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   late Animation<double> _lockAnimation;
   
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
-  final http.Client _httpClient = http.Client();
+  late http.Client _httpClient;
   http.Client? _currentRequestClient;
+  
+  // SSL Pinning configuration - SHA-256 fingerprint
+  static const String expectedCertFingerprint = 'AO5T/CbxDzIBFkUp6jLEcAk0+ZxeN06uaKyeIzIE+E0=';
+
+  String _getCertificateFingerprint(X509Certificate cert) {
+    final certDer = cert.der;
+    final fingerprint = sha256.convert(certDer);
+    return base64.encode(fingerprint.bytes);
+  }
+
+  http.Client _createPinnedHttpClient() {
+    final httpClient = HttpClient();
+    httpClient.userAgent = appUserAgent;
+    httpClient.badCertificateCallback = (X509Certificate cert, String host, int port) {
+      if (host != 'bridge.stormycloud.org') {
+        return false;
+      }
+      try {
+        final certificateFingerprint = _getCertificateFingerprint(cert);
+        return certificateFingerprint == expectedCertFingerprint;
+      } catch (_) {
+        return false;
+      }
+    };
+    return IOClient(httpClient);
+  }
   
   bool get _canGoBack => _webViewController != null && _historyIndex > 0;
   bool get _canGoForward => _webViewController != null && _historyIndex < _history.length - 1;
@@ -47,6 +76,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   void initState() {
     super.initState();
     _encryption.initialize();
+    _httpClient = _createPinnedHttpClient();
     
     _lockAnimationController = AnimationController(
       duration: const Duration(milliseconds: 300),
@@ -296,7 +326,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     _currentRequestClient?.close();
     
     // Create a new client for this request that can be cancelled
-    _currentRequestClient = http.Client();
+    _currentRequestClient = _createPinnedHttpClient();
     _log('🔧 Created new HTTP client for request: $fullUrl');
     
     for (int attempt = 0; attempt <= maxRetries; attempt++) {
