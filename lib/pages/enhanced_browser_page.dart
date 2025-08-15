@@ -19,7 +19,7 @@ class EnhancedBrowserPage extends StatefulWidget {
   State<EnhancedBrowserPage> createState() => _EnhancedBrowserPageState();
 }
 
-class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerProviderStateMixin {
+class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
   final TextEditingController _urlController = TextEditingController();
   final EncryptionService _encryption = EncryptionService();
   
@@ -43,6 +43,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   bool get _canGoBack => _webViewController != null && _historyIndex > 0;
   bool get _canGoForward => _webViewController != null && _historyIndex < _history.length - 1;
 
+  bool _viewInitialized = false;
+
+  @override
+  bool get wantKeepAlive => true;
+
   @override
   void initState() {
     super.initState();
@@ -59,6 +64,17 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     
     if (widget.initialUrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadPage(widget.initialUrl!));
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_viewInitialized) {
+      // Defer heavy webview init until first frame after this widget is visible
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _viewInitialized = true);
+      });
     }
   }
 
@@ -745,6 +761,22 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
+    return Column(
+      children: [
+        // Address bar, controls, etc. remain light
+        _buildTopBar(context),
+        const Divider(height: 1),
+        Expanded(
+          child: _viewInitialized
+              ? _buildWebView()
+              : const Center(child: CircularProgressIndicator(strokeWidth: 2)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTopBar(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -824,264 +856,24 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   Widget _buildWebView() {
-    if (_history.isEmpty && widget.initialUrl == null) {
-      return _buildLanding();
-    }
-
     return InAppWebView(
-      initialSettings: InAppWebViewSettings(
-        userAgent: appUserAgent,
-        javaScriptEnabled: true,
-        transparentBackground: true,
-        supportZoom: true,
-        cacheEnabled: false,
-        // iOS specific settings
-        allowsInlineMediaPlayback: true,
-        allowsBackForwardNavigationGestures: true,
-        // Better navigation handling
-        useShouldOverrideUrlLoading: true,
-        useOnLoadResource: true,
+      initialOptions: InAppWebViewGroupOptions(
+        crossPlatform: InAppWebViewOptions(userAgent: appUserAgent),
       ),
-      onWebViewCreated: (controller) {
-        _webViewController = controller;
-        
-        // Add JavaScript handler for link clicks
-        controller.addJavaScriptHandler(
-          handlerName: 'linkClicked',
-          callback: (args) {
-            _log('🔗 JavaScript handler called with args: $args');
-            if (args.isNotEmpty) {
-              final url = args[0].toString();
-              _log('🔗 JavaScript link click detected: $url');
-              DebugService.instance.logBrowser('Link click from JS: $url');
-              
-              // Call _loadPage directly - no need for postFrameCallback
-              _log('🔄 Processing JavaScript link click: $url');
-              _loadPage(url);
-            } else {
-              _log('❌ JavaScript handler called with no arguments');
-            }
-          },
-        );
-        
-        _log('WebView controller initialized with link handler');
-      },
-      onProgressChanged: (controller, progress) {
-        setState(() {
-          _progress = progress / 100;
-        });
-      },
+      onWebViewCreated: (controller) => _webViewController = controller,
       onLoadStart: (controller, url) {
-        _log('WebView load start: ${url?.toString()}');
         setState(() {
           _isLoading = true;
         });
       },
       onLoadStop: (controller, url) async {
-        _log('WebView load stop: ${url?.toString()}');
-        
-        // Inject comprehensive link handling JavaScript
-        _log('🔧 Injecting link handling JavaScript');
-        
-        try {
-          await controller.evaluateJavascript(source: '''
-          (function() {
-            console.log('🚀 I2P Browser link handler starting...');
-            console.log('🔍 Checking flutter_inappwebview availability:', typeof window.flutter_inappwebview);
-            
-            // Remove any existing listeners
-            if (window.i2pLinkHandler) {
-              document.removeEventListener('click', window.i2pLinkHandler, true);
-              console.log('🧹 Removed existing link handler');
-            }
-            
-            // Create comprehensive link click handler
-            window.i2pLinkHandler = function(e) {
-              console.log('Click detected on:', e.target.tagName, e.target.href || 'no href');
-              
-              var target = e.target;
-              var attempts = 0;
-              
-              // Walk up the DOM tree to find an anchor tag (max 5 levels)
-              while (target && target.tagName !== 'A' && attempts < 5) {
-                target = target.parentElement;
-                attempts++;
-                if (target) {
-                  console.log('Walking up to:', target.tagName);
-                }
-              }
-              
-              if (target && target.tagName === 'A' && target.href) {
-                console.log('Found anchor with href:', target.href);
-                
-                // Skip anchor links (#section)
-                if (target.href.indexOf('#') === target.href.length - target.href.split('#')[1].length - 1 && 
-                    target.href.split('#')[1] && 
-                    target.href.split('#')[0] === window.location.href.split('#')[0]) {
-                  console.log('Ignoring anchor link:', target.href);
-                  return;
-                }
-                
-                // Skip javascript: links
-                if (target.href.toLowerCase().startsWith('javascript:')) {
-                  console.log('Ignoring javascript link:', target.href);
-                  return;
-                }
-                
-                // Skip mailto: links
-                if (target.href.toLowerCase().startsWith('mailto:')) {
-                  console.log('Ignoring mailto link:', target.href);
-                  return;
-                }
-                
-                console.log('🚫 Preventing default and calling Flutter handler');
-                e.preventDefault();
-                e.stopPropagation();
-                e.stopImmediatePropagation();
-                
-                // Multiple attempts to call the handler
-                var handlerCalled = false;
-                
-                // Method 1: Direct handler call
-                try {
-                  if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) {
-                    window.flutter_inappwebview.callHandler('linkClicked', target.href);
-                    console.log('✅ Successfully called Flutter handler with:', target.href);
-                    handlerCalled = true;
-                  } else {
-                    console.log('❌ flutter_inappwebview not available');
-                  }
-                } catch (err) {
-                  console.error('❌ Error calling Flutter handler:', err);
-                }
-                
-                // Method 2: Fallback using window.location (will trigger shouldOverrideUrlLoading)
-                if (!handlerCalled) {
-                  console.log('🔄 Fallback: Using window.location navigation');
-                  setTimeout(function() {
-                    try {
-                      window.location.href = target.href;
-                    } catch (err) {
-                      console.error('❌ Fallback navigation failed:', err);
-                    }
-                  }, 100);
-                }
-                
-                return false;
-              } else {
-                console.log('No valid anchor found after walking up DOM');
-              }
-            };
-            
-            // Add click listener with capture=true to catch early
-            document.addEventListener('click', window.i2pLinkHandler, true);
-            
-            var linkCount = document.querySelectorAll('a[href]').length;
-            console.log('I2P link handler installed. Found', linkCount, 'links on page');
-            
-            // Debug: Log all links found
-            var allLinks = document.querySelectorAll('a[href]');
-            for (var i = 0; i < Math.min(allLinks.length, 10); i++) {
-              console.log('Link', i + ':', allLinks[i].href);
-            }
-            if (allLinks.length > 10) {
-              console.log('... and', allLinks.length - 10, 'more links');
-            }
-          })();
-          ''');
-        
-          _log('✓ Link handling JavaScript injection completed');
-        
-        } catch (jsError) {
-          _log('❌ JavaScript injection failed: $jsError');
-        }
-        
         setState(() {
           _isLoading = false;
-          _progress = 1.0;
         });
       },
-      shouldOverrideUrlLoading: (controller, navigationAction) async {
-        final uri = navigationAction.request.url!;
-        final url = uri.toString();
-        final navigationType = navigationAction.navigationType;
-        final isUserInitiated = navigationAction.isForMainFrame;
-        
-        _log('🧭 Navigation attempt: $url');
-        _log('   - Type: $navigationType');
-        _log('   - Main frame: $isUserInitiated');
-        _log('   - Current URL: $_currentUrl');
-        _log('   - Loading state: $_isLoading');
-        DebugService.instance.logBrowser('Navigation: $url (type: $navigationType)');
-        
-        // Allow data URLs and about:blank - these are needed for our loadData calls
-        if (url.startsWith('data:') || url.startsWith('about:blank')) {
-          _log('✅ Allowing data/blank URL: ${url.substring(0, 50)}...');
-          return NavigationActionPolicy.ALLOW;
-        }
-        
-        // Skip navigation if we're already loading this URL
-        if (_isLoading && url == 'http://$_currentUrl') {
-          _log('⏭️ Already loading this URL, allowing WebView navigation');
-          return NavigationActionPolicy.ALLOW;
-        }
-        
-        // For HTTP/HTTPS URLs, intercept and load through our bridge
-        if (url.startsWith('http://') || url.startsWith('https://')) {
-          _log('🚫 Intercepting HTTP navigation to load through bridge: $url');
-          _log('🔄 Current loading state: $_isLoading');
-          _log('🔄 Current request client exists: ${_currentRequestClient != null}');
-          DebugService.instance.logBrowser('Intercepting navigation: $url');
-          
-          // Don't intercept if this is the exact same URL we're currently processing
-          if (_currentBaseUrl == url && _isLoading) {
-            _log('⏭️ Same URL already in progress, allowing');
-            return NavigationActionPolicy.ALLOW;
-          }
-          
-          // Schedule the load for next frame to avoid potential race conditions
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _log('🚀 Triggering _loadPage from shouldOverrideUrlLoading: $url');
-            _loadPage(url);
-          });
-          
-          return NavigationActionPolicy.CANCEL;
-        }
-        
-        // Log and allow other protocols
-        _log('✅ Allowing other protocol: $url');
-        return NavigationActionPolicy.ALLOW;
+      onProgressChanged: (controller, progress) {
+        setState(() => _progress = progress / 100.0);
       },
-      onConsoleMessage: (controller, consoleMessage) {
-        _log('📝 JS Console [${consoleMessage.messageLevel}]: ${consoleMessage.message}');
-        DebugService.instance.logBrowser('JS Console: ${consoleMessage.message}');
-      },
-    );
-  }
-
-  Widget _buildLanding() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const SizedBox(height: 12),
-            const Text(
-              'Enter an I2P address or search above',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Privacy mode is enabled. Your requests are proxied through the bridge.',
-              style: TextStyle(fontSize: 13, color: Colors.grey.shade500),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

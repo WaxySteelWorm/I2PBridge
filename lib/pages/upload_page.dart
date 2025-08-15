@@ -16,7 +16,6 @@ import 'package:provider/provider.dart';
 import '../assets/drop_logo.dart';
 import '../services/auth_service.dart';
 import '../services/debug_service.dart';
-import '../services/auth_service.dart';
 
 class UploadPage extends StatefulWidget {
   const UploadPage({super.key});
@@ -315,7 +314,7 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
               const SizedBox(height: 16), 
               SizedBox(
                 height: 100,
-                child: SvgPicture.string(dropLogoSvg),
+                child: SvgPicture.asset(dropLogoAssetPath),
               ),
               const SizedBox(height: 32),
               

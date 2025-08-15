@@ -7,8 +7,8 @@ import 'package:shimmer/shimmer.dart';
 import '../services/pop3_mail_service.dart';
 import '../services/auth_service.dart';
 import 'compose_mail_page.dart';
-import 'read_mail_page.dart';
 import 'create_account_page.dart';
+import 'read_mail_page.dart' deferred as read_mail;
 
 class MailPage extends StatefulWidget {
   const MailPage({super.key});
@@ -609,10 +609,11 @@ class _MailPageState extends State<MailPage> {
               onTap: () async {
                 final fullMessage = await mailService.getMessage(message.id);
                 if (fullMessage != null && mounted) {
+                  await read_mail.loadLibrary();
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => ReadMailPage(
+                      builder: (context) => read_mail.ReadMailPage(
                         message: fullMessage,
                         mailService: mailService,
                       ),

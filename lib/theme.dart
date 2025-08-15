@@ -26,7 +26,11 @@ final ThemeData appTheme = ThemeData(
     onBackground: textColor,
     onSurface: textColor,
   ),
-  textTheme: GoogleFonts.interTextTheme(const TextTheme()).apply(
+  textTheme: GoogleFonts.interTextTheme(const TextTheme(
+    bodyLarge: TextStyle(fontFamilyFallback: ['system-ui', 'Roboto', 'Arial']),
+    bodyMedium: TextStyle(fontFamilyFallback: ['system-ui', 'Roboto', 'Arial']),
+    bodySmall: TextStyle(fontFamilyFallback: ['system-ui', 'Roboto', 'Arial']),
+  )).apply(
     bodyColor: textColor,
     displayColor: textColor,
   ).copyWith(
