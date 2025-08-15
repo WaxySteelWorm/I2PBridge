@@ -1,0 +1,48 @@
+{
+  "ok": true,
+  "file_path": "/workspace/artifacts/app-release.apk",
+  "file_size_bytes": 27498012,
+  "sha256": "0fb40f2ded20f19ce4955b028bec92b451448fba8ce9cb5d0cafaae539e28826",
+  "badging": {
+    "package_name": "com.example.i2p_bridge",
+    "version_name": "1.0.0",
+    "version_code": "1",
+    "min_sdk": "21",
+    "target_sdk": "35"
+  },
+  "manifest": {
+    "package_name": "com.example.i2p_bridge",
+    "version_code": "1",
+    "version_name": "1.0.0",
+    "min_sdk": "21",
+    "target_sdk": "35",
+    "application": {
+      "debuggable": false,
+      "allowBackup": null,
+      "usesCleartextTraffic": null,
+      "networkSecurityConfig": "@7F110001"
+    }
+  },
+  "permissions_declared": [
+    "android.permission.ACCESS_NETWORK_STATE",
+    "android.permission.INTERNET",
+    "com.example.i2p_bridge.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+  ],
+  "heuristics": [
+    {
+      "id": "BK001",
+      "severity": "medium",
+      "title": "allowBackup is enabled or unspecified (defaults true)"
+    },
+    {
+      "id": "CL001",
+      "severity": "info",
+      "title": "usesCleartextTraffic not explicitly set"
+    },
+    {
+      "id": "NSC001",
+      "severity": "info",
+      "title": "Custom networkSecurityConfig present"
+    }
+  ]
+}
