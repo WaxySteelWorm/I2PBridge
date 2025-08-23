@@ -1,14 +1,19 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AuthService extends ChangeNotifier {
   static const String _baseUrl = 'https://bridge.stormycloud.org';
   static const String _tokenKey = 'jwt_token';
   static const String _expiryKey = 'token_expiry';
+  
+  // Secure storage for sensitive data
+  static const _secureStorage = FlutterSecureStorage();
   
   String? _jwtToken;
   DateTime? _tokenExpiry;
@@ -55,7 +60,7 @@ class AuthService extends ChangeNotifier {
         debugPrint('⚠️ AUTH: API key not found in environment variables');
         debugPrint('   Build with: flutter run --dart-define=I2P_BRIDGE_API_KEY=your-key');
       } else {
-        debugPrint('✅ AUTH: API key loaded successfully (${_apiKey!.length} chars)');
+        debugPrint('✅ AUTH: API key loaded successfully');
       }
     } catch (e) {
       debugPrint('❌ AUTH: Error loading API key: $e');
@@ -65,8 +70,11 @@ class AuthService extends ChangeNotifier {
   /// Load stored JWT token from secure storage
   Future<void> _loadStoredToken() async {
     try {
+      // Use secure storage for JWT token
+      _jwtToken = await _secureStorage.read(key: _tokenKey);
+      
+      // Use SharedPreferences only for non-sensitive expiry time
       final prefs = await SharedPreferences.getInstance();
-      _jwtToken = prefs.getString(_tokenKey);
       final expiryMs = prefs.getInt(_expiryKey);
       
       if (expiryMs != null) {
@@ -91,8 +99,11 @@ class AuthService extends ChangeNotifier {
   /// Store JWT token securely
   Future<void> _storeToken(String token, DateTime expiry) async {
     try {
+      // Store token in secure storage
+      await _secureStorage.write(key: _tokenKey, value: token);
+      
+      // Store only expiry in SharedPreferences (non-sensitive)
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(_tokenKey, token);
       await prefs.setInt(_expiryKey, expiry.millisecondsSinceEpoch);
       
       _jwtToken = token;
@@ -110,8 +121,11 @@ class AuthService extends ChangeNotifier {
   /// Clear stored authentication data
   Future<void> _clearStoredToken() async {
     try {
+      // Clear token from secure storage
+      await _secureStorage.delete(key: _tokenKey);
+      
+      // Clear expiry from SharedPreferences
       final prefs = await SharedPreferences.getInstance();
-      await prefs.remove(_tokenKey);
       await prefs.remove(_expiryKey);
       
       _jwtToken = null;
@@ -133,10 +147,8 @@ class AuthService extends ChangeNotifier {
   
   /// Authenticate with the server and get JWT token
   Future<bool> authenticate() async {
-    debugPrint('🔄 AUTH: === Authentication Debug ===');
+    debugPrint('🔄 AUTH: Starting authentication...');
     debugPrint('🔄 AUTH: API key available: ${_apiKey != null}');
-    debugPrint('🔄 AUTH: API key length: ${_apiKey?.length ?? 0}');
-    debugPrint('🔄 AUTH: API key starts with: ${_apiKey?.substring(0, 8) ?? 'null'}...');
     
     if (_apiKey == null || _apiKey!.isEmpty) {
       debugPrint('❌ AUTH: Cannot authenticate - API key not available');
@@ -150,114 +162,133 @@ class AuthService extends ChangeNotifier {
     }
     
     try {
-      debugPrint('🔄 AUTH: Requesting new token from server...');
-      debugPrint('🔄 AUTH: Sending request to: $_baseUrl/auth/token');
-      
-      final requestBody = {'apiKey': _apiKey};
-      debugPrint('🔄 AUTH: Request body API key length: ${_apiKey!.length}');
+      debugPrint('🔄 AUTH: Requesting new JWT token from server...');
       
       final response = await http.post(
         Uri.parse('$_baseUrl/auth/token'),
         headers: {
           'Content-Type': 'application/json',
-          'User-Agent': 'I2PBridge/1.0.0 (Flutter)',
+          'Accept': 'application/json',
+          'User-Agent': _getUserAgent(),
         },
-        body: jsonEncode(requestBody),
-      ).timeout(const Duration(seconds: 30));
+        body: json.encode({
+          'apiKey': _apiKey,
+        }),
+      ).timeout(const Duration(seconds: 10));
       
-      debugPrint('🔄 AUTH: Response status: ${response.statusCode}');
-      debugPrint('🔄 AUTH: Response body: ${response.body}');
+      debugPrint('🔄 AUTH: Server responded with status: ${response.statusCode}');
       
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
+        final data = json.decode(response.body);
         final token = data['token'] as String;
-        final expiresIn = data['expiresIn'] as String;
+        final expiresIn = data['expiresIn'] as String; // e.g., "24h"
         
-        // Parse expiry (assumes format like "24h")
-        final expiryDuration = _parseExpiryDuration(expiresIn);
-        final expiry = DateTime.now().add(expiryDuration);
+        // Parse expiry time (assuming format like "24h")
+        final hours = int.parse(expiresIn.replaceAll('h', ''));
+        final expiry = DateTime.now().add(Duration(hours: hours));
         
         await _storeToken(token, expiry);
         
-        debugPrint('✅ AUTH: Authentication successful');
+        debugPrint('✅ AUTH: Authentication successful, token expires in $expiresIn');
         return true;
       } else {
-        try {
-          final errorData = jsonDecode(response.body);
-          debugPrint('❌ AUTH: Authentication failed: ${errorData['error']}');
-          debugPrint('❌ AUTH: Error code: ${errorData['code']}');
-          throw Exception('Authentication failed: ${errorData['error']}');
-        } catch (e) {
-          debugPrint('❌ AUTH: Authentication failed with status ${response.statusCode}');
-          debugPrint('❌ AUTH: Raw response: ${response.body}');
-          throw Exception('Authentication failed with status ${response.statusCode}');
+        debugPrint('❌ AUTH: Authentication failed with status ${response.statusCode}');
+        debugPrint('❌ AUTH: Response body: ${response.body}');
+        
+        // Clear any existing invalid token
+        await _clearStoredToken();
+        
+        if (response.statusCode == 401) {
+          throw Exception('Invalid API key. Please check your configuration.');
+        } else if (response.statusCode == 429) {
+          throw Exception('Rate limit exceeded. Please try again later.');
+        } else {
+          throw Exception('Authentication failed: ${response.statusCode}');
         }
       }
+    } on SocketException catch (e) {
+      debugPrint('❌ AUTH: Network error during authentication: $e');
+      throw Exception('Network error. Please check your connection.');
+    } on TimeoutException catch (e) {
+      debugPrint('❌ AUTH: Request timeout during authentication: $e');
+      throw Exception('Request timeout. Please try again.');
     } catch (e) {
-      debugPrint('❌ AUTH: Authentication error: $e');
-      await _clearStoredToken();
+      debugPrint('❌ AUTH: Unexpected error during authentication: $e');
       rethrow;
     }
   }
   
-  /// Parse expiry duration string (e.g., "24h" -> Duration(hours: 24))
-  Duration _parseExpiryDuration(String expiresIn) {
-    final regex = RegExp(r'(\d+)([hm])');
-    final match = regex.firstMatch(expiresIn);
-    
-    if (match != null) {
-      final value = int.parse(match.group(1)!);
-      final unit = match.group(2)!;
-      
-      switch (unit) {
-        case 'h':
-          return Duration(hours: value);
-        case 'm':
-          return Duration(minutes: value);
-      }
-    }
-    
-    // Default to 23 hours if parsing fails
-    return const Duration(hours: 23);
-  }
-  
-  /// Get HTTP headers with authentication
-  Map<String, String> getAuthHeaders() {
-    final headers = <String, String>{
-      'Content-Type': 'application/json',
-      'User-Agent': 'I2PBridge/1.0.0 (Flutter)',
-    };
-    
-    if (_jwtToken != null) {
-      headers['Authorization'] = 'Bearer $_jwtToken';
-    }
-    
-    return headers;
-  }
-  
-  /// Ensure authentication before making API calls
+  /// Ensure user is authenticated (for backward compatibility)
   Future<void> ensureAuthenticated() async {
-    // Wait a bit for initialization if still in progress
-    int retries = 0;
-    while (_apiKey == null && retries < 10) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      retries++;
-    }
-    
     if (!_isTokenValid()) {
-      debugPrint('🔄 AUTH: Token invalid, re-authenticating...');
+      debugPrint('🔄 AUTH: Token invalid or expired, re-authenticating...');
       await authenticate();
     }
+    
+    if (_jwtToken == null) {
+      throw Exception('Authentication required');
+    }
   }
   
-  /// Logout and clear stored tokens
+  /// Get authentication headers for API requests  
+  Map<String, String> getAuthHeaders() {
+    if (_jwtToken == null) {
+      throw Exception('Authentication required - call ensureAuthenticated() first');
+    }
+    
+    return {
+      'Authorization': 'Bearer $_jwtToken',
+      'User-Agent': _getUserAgent(),
+    };
+  }
+  
+  /// Get authentication headers for API requests (async version)
+  Future<Map<String, String>> getAuthHeadersAsync() async {
+    // Ensure we have a valid token
+    await ensureAuthenticated();
+    return getAuthHeaders();
+  }
+  
+  /// Get current authentication status
+  Future<bool> checkAuthStatus() async {
+    if (_isTokenValid()) {
+      return true;
+    }
+    
+    try {
+      return await authenticate();
+    } catch (e) {
+      debugPrint('❌ AUTH: Failed to authenticate: $e');
+      return false;
+    }
+  }
+  
+  /// Logout and clear authentication data
   Future<void> logout() async {
     debugPrint('🔄 AUTH: Logging out...');
     await _clearStoredToken();
-    debugPrint('✅ AUTH: Logout complete');
+    debugPrint('✅ AUTH: Logged out successfully');
   }
   
-  /// Handle authentication errors (token expired, etc.)
+  /// Get user agent string for API requests
+  String _getUserAgent() {
+    String platform = 'Unknown';
+    if (Platform.isIOS) {
+      platform = 'iOS';
+    } else if (Platform.isAndroid) {
+      platform = 'Android';
+    } else if (Platform.isMacOS) {
+      platform = 'macOS';
+    } else if (Platform.isWindows) {
+      platform = 'Windows';
+    } else if (Platform.isLinux) {
+      platform = 'Linux';
+    }
+    
+    return 'I2PBridge/1.0.0 ($platform; Flutter)';
+  }
+  
+  /// Handle authentication errors (e.g., 401 responses)
   Future<void> handleAuthError() async {
     debugPrint('🔄 AUTH: Handling authentication error...');
     await _clearStoredToken();
@@ -270,70 +301,4 @@ class AuthService extends ChangeNotifier {
       rethrow;
     }
   }
-}
-=======
-import 'package:http/http.dart' as http;
-import 'package:flutter/foundation.dart';
-
-/// AuthService: obtains and caches JWT tokens for bridge API
-class AuthService {
-  AuthService._();
-  static final AuthService instance = AuthService._();
-
-  static const String _bridgeBase = 'https://bridge.stormycloud.org';
-  // Provide API key at build time: --dart-define=I2P_BRIDGE_API_KEY=... (min 32 chars)
-  static const String _apiKey = String.fromEnvironment('I2P_BRIDGE_API_KEY');
-
-  String? _token;
-  DateTime? _expiry;
-  bool _initializing = false;
-
-  Future<void> initialize() async {
-    if (_token != null && _expiry != null && DateTime.now().isBefore(_expiry!)) return;
-    await ensureToken();
-  }
-
-  Future<void> ensureToken() async {
-    if (_initializing) return;
-    if (_token != null && _expiry != null && DateTime.now().isBefore(_expiry!)) return;
-
-    _initializing = true;
-    try {
-      if (_apiKey.isEmpty) {
-        debugPrint('❌ AUTH: Missing I2P_BRIDGE_API_KEY. Pass with --dart-define.');
-        return;
-      }
-      final resp = await http.post(
-        Uri.parse('$_bridgeBase/auth/token'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': 'I2PBridge/1.0.0 (Mobile; Flutter)'
-        },
-        body: json.encode({'apiKey': _apiKey}),
-      ).timeout(const Duration(seconds: 10));
-
-      if (resp.statusCode == 200) {
-        final data = json.decode(resp.body) as Map<String, dynamic>;
-        _token = data['token']?.toString();
-        // expiresIn is '24h' — set expiry 23h to be safe
-        _expiry = DateTime.now().add(const Duration(hours: 23));
-        debugPrint('✅ AUTH: Token acquired');
-      } else {
-        debugPrint('❌ AUTH: Failed to get token: ${resp.statusCode} ${resp.body}');
-      }
-    } catch (e) {
-      debugPrint('❌ AUTH: Token request error: $e');
-    } finally {
-      _initializing = false;
-    }
-  }
-
-  Future<Map<String, String>> authHeader() async {
-    await ensureToken();
-    if (_token == null) return {};
-    return {'Authorization': 'Bearer $_token'};
-  }
-
-  String? get token => _token;
 }

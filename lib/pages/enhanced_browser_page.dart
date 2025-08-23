@@ -19,7 +19,7 @@ class EnhancedBrowserPage extends StatefulWidget {
   State<EnhancedBrowserPage> createState() => _EnhancedBrowserPageState();
 }
 
-class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
+class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerProviderStateMixin {
   final TextEditingController _urlController = TextEditingController();
   final EncryptionService _encryption = EncryptionService();
   
@@ -28,6 +28,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
   double _progress = 0;
   String _currentUrl = '';
   String _currentBaseUrl = '';
+  String _lastLoadedUrl = ''; // Track last successfully loaded URL to prevent duplicates
+  bool _encryptionEnabled = true;
+  late AnimationController _lockAnimationController;
+  late Animation<double> _lockAnimation;
   
   final List<String> _history = [];
   int _historyIndex = -1;
@@ -45,6 +49,19 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
     super.initState();
     _encryption.initialize();
     
+    // Initialize animation controller
+    _lockAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _lockAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _lockAnimationController, curve: Curves.easeInOut),
+    );
+    
+    // Start with encryption enabled animation
+    if (_encryptionEnabled) {
+      _lockAnimationController.forward();
+    }
     
     if (widget.initialUrl != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _loadPage(widget.initialUrl!));
@@ -54,6 +71,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
   @override
   void dispose() {
     _httpClient.close();
+    _lockAnimationController.dispose();
     super.dispose();
   }
   
@@ -196,6 +214,18 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
     String fullUrl = cleanInput.startsWith('http') ? cleanInput : 'http://$cleanInput';
     String cleanUrl = cleanInput.replaceFirst(RegExp(r'^https?://'), '');
     
+    // Check if we're already loading this exact URL to prevent duplicate loads
+    if (!forceRefresh && _isLoading && (fullUrl == _currentBaseUrl || fullUrl == _lastLoadedUrl)) {
+      _log('⏭️ Already loading or loaded this URL, skipping duplicate load');
+      return;
+    }
+    
+    // Check if this is the same URL we just loaded (prevent infinite loops)
+    if (!forceRefresh && fullUrl == _lastLoadedUrl && !_isLoading) {
+      _log('⏭️ This URL was just loaded successfully, skipping duplicate');
+      return;
+    }
+    
     _log('🌍 _loadPage START: $fullUrl');
     _log('   - Original input: $url');
     _log('   - From history: $fromHistory');
@@ -203,6 +233,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
     _log('   - Full URL: $fullUrl');
     _log('   - Clean URL: $cleanUrl');
     _log('   - Current loading state: $_isLoading');
+    _log('   - Last loaded URL: $_lastLoadedUrl');
     DebugService.instance.logBrowser('Loading: $fullUrl');
     
     setState(() {
@@ -247,6 +278,12 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
           encoding: "utf8",
           baseUrl: baseUrl,
         );
+        
+        // Mark this URL as successfully loaded to prevent duplicate loads
+        _lastLoadedUrl = fullUrl;
+        
+        // Update the URL in the address bar
+        _urlController.text = cleanUrl;
       }
       
       setState(() => _progress = 1.0);
@@ -310,10 +347,13 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
             if (widget.sessionCookie != null) 'Cookie': widget.sessionCookie!,
           };
 
-          final auth = await AuthService.instance.authHeader();
+          final authService = Provider.of<AuthService>(context, listen: false);
+          await authService.ensureAuthenticated();
+          final auth = authService.getAuthHeaders();
           headers.addAll(auth);
           
-          final body = 'url=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
+          // Server expects 'data' field when encrypted
+          final body = 'data=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
           
           DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
           final response = await _currentRequestClient!.post(
@@ -352,7 +392,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
           };
-          final auth = await AuthService.instance.authHeader();
+          final authService = Provider.of<AuthService>(context, listen: false);
+          await authService.ensureAuthenticated();
+          final auth = authService.getAuthHeaders();
           headers.addAll(auth);
           if (widget.sessionCookie != null) headers['Cookie'] = widget.sessionCookie!;
           
@@ -360,19 +402,26 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
           final response = await _currentRequestClient!.get(browseUrl, headers: headers).timeout(const Duration(seconds: 45));
           DebugService.instance.logHttp('Response: ${response.statusCode} (${response.body.length} bytes)');
           
-          _log('Bridge response: ${response.statusCode}');          
-          try {
-            final jsonResponse = jsonDecode(response.body);
-            final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
-            if (content.toString().trim().isEmpty) {
-              throw Exception('No content in response');
+          _log('Bridge response: ${response.statusCode}');
+          
+          if (response.statusCode == 200) {
+            if (response.body.trim().isEmpty) {
+              throw Exception('Empty response from server');
             }
-            return _cleanupAndReturn(content.toString());
-          } catch (jsonError) {
-            return _cleanupAndReturn(response.body);
+            
+            try {
+              final jsonResponse = jsonDecode(response.body);
+              final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
+              if (content.toString().trim().isEmpty) {
+                throw Exception('No content in response');
+              }
+              return _cleanupAndReturn(content.toString());
+            } catch (jsonError) {
+              return _cleanupAndReturn(response.body);
+            }
+          } else {
+            throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
           }
-        } else {
-          throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
         }
       } catch (e) {
         _log('❌ Bridge fetch error (attempt ${attempt + 1}): $e');
@@ -818,7 +867,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
         javaScriptEnabled: true,
         transparentBackground: true,
         supportZoom: true,
-        cacheEnabled: false,
+        cacheEnabled: true, // Enable caching to reduce redundant requests
         // iOS specific settings
         allowsInlineMediaPlayback: true,
         allowsBackForwardNavigationGestures: true,
@@ -863,6 +912,220 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
       },
       onLoadStop: (controller, url) async {
         _log('WebView load stop: ${url?.toString()}');
+        
+        // Inject request throttling JavaScript first
+        _log('🔧 Injecting request throttling JavaScript');
+        try {
+          await controller.evaluateJavascript(source: '''
+          (function() {
+            console.log('🚦 Installing request throttling...');
+            
+            // Request throttling configuration
+            const THROTTLE_DELAY = 500; // Minimum 500ms between requests
+            const CACHE_DURATION = 5000; // Cache responses for 5 seconds
+            const MAX_REQUESTS_PER_SECOND = 2;
+            
+            // Request queue and cache
+            const requestQueue = [];
+            const responseCache = new Map();
+            const requestTimestamps = [];
+            let isProcessing = false;
+            
+            // Helper to create cache key
+            function getCacheKey(url, options) {
+              return url + JSON.stringify(options || {});
+            }
+            
+            // Helper to check if we're rate limited
+            function isRateLimited() {
+              const now = Date.now();
+              // Remove timestamps older than 1 second
+              while (requestTimestamps.length > 0 && requestTimestamps[0] < now - 1000) {
+                requestTimestamps.shift();
+              }
+              return requestTimestamps.length >= MAX_REQUESTS_PER_SECOND;
+            }
+            
+            // Process request queue
+            async function processQueue() {
+              if (isProcessing || requestQueue.length === 0) return;
+              isProcessing = true;
+              
+              while (requestQueue.length > 0) {
+                if (isRateLimited()) {
+                  // Wait before processing next request
+                  await new Promise(resolve => setTimeout(resolve, THROTTLE_DELAY));
+                  continue;
+                }
+                
+                const { url, options, resolve, reject } = requestQueue.shift();
+                const cacheKey = getCacheKey(url, options);
+                
+                // Check cache first
+                const cached = responseCache.get(cacheKey);
+                if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
+                  console.log('📦 Returning cached response for:', url);
+                  resolve(cached.response.clone());
+                  continue;
+                }
+                
+                try {
+                  // Record timestamp
+                  requestTimestamps.push(Date.now());
+                  
+                  // Special handling for known problematic endpoints
+                  if (url.includes('/favorites/') || url.includes('/poll/') || url.includes('/heartbeat/')) {
+                    console.log('⚠️ Throttling problematic endpoint:', url);
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // Extra delay for these
+                  }
+                  
+                  console.log('🌐 Making throttled request to:', url);
+                  const response = await window.originalFetch(url, options);
+                  
+                  // Cache successful responses
+                  if (response.ok && (!options || options.method === 'GET' || !options.method)) {
+                    responseCache.set(cacheKey, {
+                      response: response.clone(),
+                      timestamp: Date.now()
+                    });
+                    
+                    // Clean old cache entries
+                    for (const [key, value] of responseCache.entries()) {
+                      if (Date.now() - value.timestamp > CACHE_DURATION * 2) {
+                        responseCache.delete(key);
+                      }
+                    }
+                  }
+                  
+                  resolve(response);
+                } catch (error) {
+                  reject(error);
+                }
+                
+                // Minimum delay between requests
+                if (requestQueue.length > 0) {
+                  await new Promise(resolve => setTimeout(resolve, THROTTLE_DELAY));
+                }
+              }
+              
+              isProcessing = false;
+            }
+            
+            // Store original fetch
+            if (!window.originalFetch) {
+              window.originalFetch = window.fetch;
+              
+              // Override fetch with throttled version
+              window.fetch = function(url, options) {
+                // Convert relative URLs to absolute
+                if (typeof url === 'string' && !url.startsWith('http')) {
+                  url = new URL(url, window.location.href).href;
+                }
+                
+                return new Promise((resolve, reject) => {
+                  requestQueue.push({ url, options, resolve, reject });
+                  processQueue();
+                });
+              };
+              
+              console.log('✅ Fetch throttling installed');
+            }
+            
+            // Override XMLHttpRequest
+            const OriginalXHR = window.XMLHttpRequest;
+            if (!window.XMLHttpRequestOriginal) {
+              window.XMLHttpRequestOriginal = OriginalXHR;
+              
+              window.XMLHttpRequest = function() {
+                const xhr = new OriginalXHR();
+                const originalOpen = xhr.open;
+                const originalSend = xhr.send;
+                
+                xhr.open = function(method, url, ...args) {
+                  this._url = url;
+                  this._method = method;
+                  return originalOpen.call(this, method, url, ...args);
+                };
+                
+                xhr.send = function(data) {
+                  const url = this._url;
+                  const method = this._method;
+                  
+                  // Log and potentially throttle
+                  console.log('📡 XHR request intercepted:', method, url);
+                  
+                  // Add delay for problematic endpoints
+                  if (url && (url.includes('/favorites/') || url.includes('/poll/'))) {
+                    console.log('⏱️ Delaying XHR request to:', url);
+                    setTimeout(() => originalSend.call(this, data), 2000);
+                  } else {
+                    return originalSend.call(this, data);
+                  }
+                };
+                
+                return xhr;
+              };
+              
+              console.log('✅ XMLHttpRequest throttling installed');
+            }
+            
+            console.log('🚦 Request throttling fully configured');
+            
+            // Prevent rapid page reloads
+            let lastReloadTime = 0;
+            const MIN_RELOAD_INTERVAL = 5000; // 5 seconds minimum between reloads
+            
+            // Override location.reload
+            const originalReload = window.location.reload;
+            window.location.reload = function() {
+              const now = Date.now();
+              if (now - lastReloadTime < MIN_RELOAD_INTERVAL) {
+                console.warn('⛔ Blocked rapid reload attempt');
+                return;
+              }
+              lastReloadTime = now;
+              console.log('🔄 Allowing reload after cooldown');
+              return originalReload.call(window.location);
+            };
+            
+            // Monitor location.href changes
+            let lastLocationChange = 0;
+            const originalLocationSetter = Object.getOwnPropertyDescriptor(window.location, 'href').set;
+            Object.defineProperty(window.location, 'href', {
+              set: function(value) {
+                const now = Date.now();
+                if (now - lastLocationChange < MIN_RELOAD_INTERVAL && value === window.location.href) {
+                  console.warn('⛔ Blocked rapid navigation to same URL:', value);
+                  return;
+                }
+                lastLocationChange = now;
+                console.log('🔗 Allowing navigation to:', value);
+                return originalLocationSetter.call(window.location, value);
+              },
+              get: function() {
+                return window.location.toString();
+              }
+            });
+            
+            // Block meta refresh tags that are too aggressive
+            document.querySelectorAll('meta[http-equiv="refresh"]').forEach(meta => {
+              const content = meta.getAttribute('content');
+              if (content) {
+                const seconds = parseInt(content.split(';')[0]);
+                if (seconds < 5) {
+                  console.warn('⛔ Removing aggressive meta refresh tag with interval:', seconds);
+                  meta.remove();
+                }
+              }
+            });
+            
+            console.log('🛡️ Page reload protection installed');
+          })();
+          ''');
+          _log('✓ Request throttling and reload protection JavaScript injected');
+        } catch (e) {
+          _log('❌ Failed to inject throttling JavaScript: $e');
+        }
         
         // Inject comprehensive link handling JavaScript
         _log('🔧 Injecting link handling JavaScript');
@@ -1000,36 +1263,38 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> {
         
         // Allow data URLs and about:blank - these are needed for our loadData calls
         if (url.startsWith('data:') || url.startsWith('about:blank')) {
-          _log('✅ Allowing data/blank URL: ${url.substring(0, 50)}...');
+          final displayUrl = url.length > 50 ? '${url.substring(0, 50)}...' : url;
+          _log('✅ Allowing data/blank URL: $displayUrl');
           return NavigationActionPolicy.ALLOW;
         }
         
-        // Skip navigation if we're already loading this URL
-        if (_isLoading && url == 'http://$_currentUrl') {
-          _log('⏭️ Already loading this URL, allowing WebView navigation');
-          return NavigationActionPolicy.ALLOW;
-        }
-        
-        // For HTTP/HTTPS URLs, intercept and load through our bridge
+        // For HTTP/HTTPS URLs, only intercept if it's a user-initiated navigation (link click)
+        // and not an automatic redirect or refresh
         if (url.startsWith('http://') || url.startsWith('https://')) {
-          _log('🚫 Intercepting HTTP navigation to load through bridge: $url');
-          _log('🔄 Current loading state: $_isLoading');
-          _log('🔄 Current request client exists: ${_currentRequestClient != null}');
-          DebugService.instance.logBrowser('Intercepting navigation: $url');
-          
-          // Don't intercept if this is the exact same URL we're currently processing
-          if (_currentBaseUrl == url && _isLoading) {
-            _log('⏭️ Same URL already in progress, allowing');
+          // Check if this is the same URL we just loaded - prevent loops
+          if (url == _currentUrl || url == 'http://$_currentUrl' || url == _currentBaseUrl) {
+            _log('⏭️ Same URL as current, allowing to prevent loop');
             return NavigationActionPolicy.ALLOW;
           }
           
-          // Schedule the load for next frame to avoid potential race conditions
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _log('🚀 Triggering _loadPage from shouldOverrideUrlLoading: $url');
+          // ONLY intercept true user-initiated actions
+          // LINK_ACTIVATED: User clicked a link
+          // FORM_SUBMITTED: User submitted a form
+          // Do NOT intercept OTHER - let JavaScript navigation happen naturally
+          if (navigationType == NavigationType.LINK_ACTIVATED || 
+              navigationType == NavigationType.FORM_SUBMITTED) {
+            _log('🚫 Intercepting user action (${navigationType.toString()}) to load through bridge: $url');
+            DebugService.instance.logBrowser('Intercepting user navigation: $url');
+            
+            // Load the page immediately
             _loadPage(url);
-          });
+            
+            return NavigationActionPolicy.CANCEL;
+          }
           
-          return NavigationActionPolicy.CANCEL;
+          // Allow other navigation types (reload, back/forward)
+          _log('✅ Allowing navigation type: $navigationType');
+          return NavigationActionPolicy.ALLOW;
         }
         
         // Log and allow other protocols

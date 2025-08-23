@@ -19,8 +19,6 @@ import 'assets/stormycloud_logo.dart';
 void main(List<String> args) {
   // Initialize debug service with command line arguments
   DebugService.instance.initialize(args);
-  // Initialize auth service (fetch JWT)
-  AuthService.instance.initialize();
   
   // Always show app startup message
   DebugService.instance.forceLog('🚀 I2P Bridge starting...');
