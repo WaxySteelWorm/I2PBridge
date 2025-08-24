@@ -9,6 +9,9 @@ jobs:
     runs-on: [self-hosted, macOS]
     steps:
       - uses: actions/checkout@v4
+        with:
+          clean: true
+          fetch-depth: 0
       
       - name: Debug runner environment
         run: |
@@ -20,32 +23,47 @@ jobs:
           echo "Runner temp: $RUNNER_TEMP"
           echo "Runner workspace: $GITHUB_WORKSPACE"
       
-      - run: flutter pub get
+      - name: Clean build artifacts and cache
+        run: |
+          flutter clean || true
+          rm -rf .dart_tool
+          rm -rf build
+          rm -rf ~/.pub-cache/hosted
+          rm -rf ios/Pods
+          rm -f ios/Podfile.lock
+          
+      - name: Get Flutter dependencies
+        run: |
+          flutter pub cache repair
+          flutter pub get
+          
+      - name: Install iOS dependencies
+        run: |
+          cd ios
+          pod install
+          cd ..
+          
       - run: flutter build ios --no-codesign
   build-android:
     runs-on: [self-hosted, linux]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Cache Flutter packages
-        uses: actions/cache@v4
         with:
-          path: |
-            ~/.pub-cache
-          key: ${{ runner.os }}-flutter-pub-${{ hashFiles('**/pubspec.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-flutter-pub
+          clean: true
+          fetch-depth: 0
 
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle
-
-      - run: flutter pub get
+      - name: Clean build artifacts and cache
+        run: |
+          flutter clean || true
+          rm -rf .dart_tool
+          rm -rf build
+          rm -rf ~/.pub-cache/hosted
+          rm -rf android/.gradle
+          
+      - name: Get Flutter dependencies
+        run: |
+          flutter pub cache repair
+          flutter pub get
+          
       - run: flutter build apk --debug
 
