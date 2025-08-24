@@ -36,10 +36,6 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   
   final List<String> _history = [];
   int _historyIndex = -1;
-  bool _encryptionEnabled = true;
-  
-  late AnimationController _lockAnimationController;
-  late Animation<double> _lockAnimation;
   
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
   final http.Client _httpClient = http.Client();
@@ -54,7 +50,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     _encryption.initialize();
     
     // Initialize animation controller
-
+    _lockAnimationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    
     _lockAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _lockAnimationController, curve: Curves.easeInOut),
     );
