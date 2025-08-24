@@ -20,6 +20,12 @@ jobs:
           echo "Runner temp: $RUNNER_TEMP"
           echo "Runner workspace: $GITHUB_WORKSPACE"
       
+      - name: Clean build artifacts
+        run: |
+          flutter clean
+          rm -rf .dart_tool
+          rm -rf build
+          
       - run: flutter pub get
       - run: flutter build ios --no-codesign
   build-android:
@@ -46,6 +52,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle
 
+      - name: Clean build artifacts
+        run: |
+          flutter clean
+          rm -rf .dart_tool
+          rm -rf build
+          
       - run: flutter pub get
       - run: flutter build apk --debug
 
