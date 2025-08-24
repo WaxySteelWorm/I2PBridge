@@ -302,3 +302,4 @@ class AuthService extends ChangeNotifier {
     }
   }
 }
+

@@ -216,6 +216,7 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         final authHeaders = authService.getAuthHeaders();
         request.headers.addAll(authHeaders);
 
+
         // Set timeout and send with pinned client
         var streamedResponse = await _httpClient.send(request).timeout(
           const Duration(seconds: 30),
