@@ -458,6 +458,15 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
               return _cleanupAndReturn(response.body);
             }
 
+          } else if (response.statusCode == 503) {
+            // Service unavailable - check for custom message
+            try {
+              final jsonResponse = jsonDecode(response.body);
+              final message = jsonResponse['message'] ?? jsonResponse['error'] ?? 'Service Unavailable';
+              throw Exception(message);
+            } catch (jsonError) {
+              throw Exception('Service temporarily unavailable');
+            }
           } else {
             throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
           }
@@ -755,6 +764,20 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   String _createErrorPage(String error) {
+    // Check if this is a service disabled error
+    bool isServiceDisabled = error.contains('temporarily disabled') || 
+                            error.contains('Service Unavailable') ||
+                            error.contains('service is disabled');
+    
+    String icon = isServiceDisabled ? '🚫' : '⚠️';
+    String title = isServiceDisabled ? 'Service Temporarily Unavailable' : 'Connection Error';
+    String message = error;
+    
+    // Clean up the error message for service disabled cases
+    if (isServiceDisabled && error.contains('Exception:')) {
+      message = error.replaceAll('Exception:', '').trim();
+    }
+    
     return '''
     <!DOCTYPE html>
     <html>
@@ -773,14 +796,23 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           border-radius: 12px;
           padding: 24px;
           margin: 20px 0;
-          border: 1px solid #444;
+          border: 1px solid ${isServiceDisabled ? '#ff9800' : '#444'};
         }
         .error-icon {
           font-size: 48px;
           margin-bottom: 16px;
         }
+        h2 {
+          color: ${isServiceDisabled ? '#ff9800' : '#ffffff'};
+          margin: 16px 0;
+        }
+        p {
+          margin: 12px 0;
+          line-height: 1.5;
+          font-size: 16px;
+        }
         .retry-button {
-          background: #4A9EFF;
+          background: ${isServiceDisabled ? '#ff9800' : '#4A9EFF'};
           color: white;
           border: none;
           padding: 12px 24px;
@@ -788,6 +820,13 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           font-size: 16px;
           margin-top: 16px;
           cursor: pointer;
+        }
+        .info-message {
+          margin-top: 16px;
+          padding: 12px;
+          background: rgba(255, 152, 0, 0.1);
+          border-radius: 8px;
+          font-size: 14px;
         }
         .debug-info {
           background: #1a1a1a;
@@ -804,9 +843,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     </head>
     <body>
       <div class="error-container">
-        <div class="error-icon">⚠️</div>
-        <h2>Connection Error</h2>
-        <p>$error</p>
+        <div class="error-icon">$icon</div>
+        <h2>$title</h2>
+        <p>$message</p>
+        ${isServiceDisabled ? '<div class="info-message">This service has been temporarily disabled by the administrator. Please try again later.</div>' : ''}
         <button class="retry-button" onclick="location.reload()">Retry</button>
         <div class="debug-info">Debug Info:\nCurrent URL: $_currentUrl\nBase URL: $_currentBaseUrl\nEncryption: Always Enabled</div>
       </div>

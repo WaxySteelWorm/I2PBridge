@@ -304,6 +304,14 @@ class Pop3MailService with ChangeNotifier {
       } else {
         if (response.statusCode == 400) {
           _lastError = 'Invalid username or password';
+        } else if (response.statusCode == 503) {
+          // Service unavailable - check for custom message
+          try {
+            final jsonResponse = json.decode(response.body);
+            _lastError = jsonResponse['message'] ?? 'Mail service is temporarily disabled';
+          } catch (e) {
+            _lastError = 'Mail service is temporarily disabled';
+          }
         } else if (response.statusCode == 500) {
           _lastError = 'Authentication failed - check credentials';
         } else {

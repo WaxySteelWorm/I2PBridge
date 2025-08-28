@@ -250,6 +250,23 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           );
           
           break; // Success - exit retry loop
+        } else if (streamedResponse.statusCode == 503) {
+          // Service unavailable - check for custom message
+          String errorMessage = 'Upload service is temporarily disabled';
+          try {
+            errorMessage = decodedBody['message'] ?? errorMessage;
+          } catch (e) {
+            // Use default message
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+          setState(() => _isLoading = false);
+          return; // Exit early for service unavailable
         } else {
           throw Exception(decodedBody['message'] ?? 'Upload failed');
         }

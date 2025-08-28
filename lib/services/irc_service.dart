@@ -166,23 +166,30 @@ class IrcService with ChangeNotifier {
     _lastChannel = initialChannel; // Store the channel to join
     
     _loadSettings().then((_) {
-      // Create pinned HTTP client for WebSocket
-      final httpClient = _createPinnedHttpClient();
-      final wsUrl = Uri.parse('wss://bridge.stormycloud.org');
-      _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
+      try {
+        // Create pinned HTTP client for WebSocket
+        final httpClient = _createPinnedHttpClient();
+        final wsUrl = Uri.parse('wss://bridge.stormycloud.org');
+        _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
 
-      _isConnected = true;
-      _buffers.clear();
-      _unreadBuffers.clear();
-      _userLists.clear();
-      _currentBuffer = 'Status';
-      _encryptionReady = false;
-      
-      _buffers['Status'] = [ParsedMessage(
-        sender: 'Status', 
-        content: 'Establishing secure connection...',
-      )];
-      notifyListeners();
+        _isConnected = true;
+        _buffers.clear();
+        _unreadBuffers.clear();
+        _userLists.clear();
+        _currentBuffer = 'Status';
+        _encryptionReady = false;
+        
+        _buffers['Status'] = [ParsedMessage(
+          sender: 'Status', 
+          content: 'Establishing secure connection...',
+        )];
+        notifyListeners();
+      } catch (e) {
+        _isConnected = false;
+        _addMessage(to: 'Status', sender: 'Error', content: 'Failed to connect: Service may be temporarily disabled');
+        notifyListeners();
+        return;
+      }
 
       bool registrationComplete = false;
       bool hasJoinedChannel = false;
@@ -284,10 +291,23 @@ class IrcService with ChangeNotifier {
           notifyListeners();
         },
         onError: (error) {
-          _addMessage(to: 'Status', sender: 'Status', content: 'Error: $error');
+          String errorMessage = 'Connection error';
+          
+          // Check if error contains service unavailable message
+          if (error.toString().contains('503') || error.toString().contains('Service Unavailable')) {
+            errorMessage = 'IRC service is temporarily disabled. Please try again later.';
+            _manualDisconnect = true; // Don't auto-reconnect for service disabled
+          } else if (error.toString().contains('WebSocketChannelException')) {
+            errorMessage = 'Failed to connect to IRC service. It may be temporarily disabled.';
+          } else {
+            errorMessage = 'Error: $error';
+          }
+          
+          _addMessage(to: 'Status', sender: 'Status', content: errorMessage);
           _isConnected = false;
           _encryptionReady = false;
           _registrationTimer?.cancel();
+          
           if (!_manualDisconnect) {
             _scheduleReconnect();
           }
