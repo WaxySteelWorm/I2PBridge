@@ -16,7 +16,6 @@ import 'package:provider/provider.dart';
 import '../assets/drop_logo.dart';
 import '../services/auth_service.dart';
 import '../services/debug_service.dart';
-import '../services/auth_service.dart';
 
 class UploadPage extends StatefulWidget {
   const UploadPage({super.key});
@@ -214,7 +213,9 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         // Add auth header
         final authService = Provider.of<AuthService>(context, listen: false);
         await authService.ensureAuthenticated();
-        request.headers.addAll(authService.getAuthHeaders());
+        final authHeaders = authService.getAuthHeaders();
+        request.headers.addAll(authHeaders);
+
 
         // Set timeout and send with pinned client
         var streamedResponse = await _httpClient.send(request).timeout(
@@ -249,6 +250,23 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           );
           
           break; // Success - exit retry loop
+        } else if (streamedResponse.statusCode == 503) {
+          // Service unavailable - check for custom message
+          String errorMessage = 'Upload service is temporarily disabled';
+          try {
+            errorMessage = decodedBody['message'] ?? errorMessage;
+          } catch (e) {
+            // Use default message
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+          setState(() => _isLoading = false);
+          return; // Exit early for service unavailable
         } else {
           throw Exception(decodedBody['message'] ?? 'Upload failed');
         }

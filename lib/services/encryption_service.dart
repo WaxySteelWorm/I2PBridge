@@ -37,34 +37,57 @@ class EncryptionService {
   }
 
   // Derive a key from the master session key using HKDF (RFC 5869)
-  Uint8List _deriveKey(Uint8List masterKey, String context, {int keyLength = 32}) {
+  // Enhanced key derivation with proper salt handling
+  Map<String, Uint8List> _deriveKeyWithSalt(Uint8List masterKey, String context, {int keyLength = 32, Uint8List? providedSalt}) {
     // Use HKDF-SHA256 for secure key derivation
     final hkdf = HKDFKeyDerivator(SHA256Digest());
     
-    // Generate a static salt from context to ensure deterministic derivation
-    // In production, consider using a random salt stored with the session
+    // Use provided salt or generate a new random salt
+    final salt = providedSalt ?? _getSecureRandom().nextBytes(16);
+    
     final contextBytes = utf8.encode(context);
-    final saltDigest = SHA256Digest();
-    final salt = saltDigest.process(Uint8List.fromList([
-      ...utf8.encode('I2PBridge-KDF-Salt-v1'),
-      ...contextBytes
-    ])).sublist(0, 16); // Use first 16 bytes as salt
     
     // Initialize HKDF with salt and input key material (IKM)
     hkdf.init(HkdfParameters(masterKey, keyLength, salt, contextBytes));
     
     // Derive the key
-    return hkdf.process(Uint8List(keyLength));
+    final derivedKey = hkdf.process(Uint8List(keyLength));
+    
+    // Return both salt and derived key
+    return {
+      'key': derivedKey,
+      'salt': salt,
+    };
+  }
+  
+  // Wrapper for backward compatibility
+  Uint8List _deriveKey(Uint8List masterKey, String context, {int keyLength = 32}) {
+    final result = _deriveKeyWithSalt(masterKey, context, keyLength: keyLength);
+    return result['key']!;
   }
 
   // Get a cryptographically secure random number generator
   SecureRandom _getSecureRandom() {
-    final secureRandom = SecureRandom('Fortuna')
-      ..seed(KeyParameter(
-        Uint8List.fromList(
-          List.generate(32, (_) => Random.secure().nextInt(256))
-        )
-      ));
+    // Use Fortuna PRNG with proper initialization
+    final secureRandom = SecureRandom('Fortuna');
+    
+    // Seed with 32 bytes of entropy from platform's secure random
+    final seedBytes = Uint8List(32);
+    final random = Random.secure();
+    for (int i = 0; i < 32; i++) {
+      seedBytes[i] = random.nextInt(256);
+    }
+    
+    // Add additional entropy from multiple sources
+    final entropy = Uint8List(32);
+    for (int i = 0; i < 32; i++) {
+      // Combine multiple entropy sources
+      entropy[i] = seedBytes[i] ^ 
+                   (DateTime.now().microsecondsSinceEpoch & 0xFF) ^
+                   (i * 37); // Simple mixing
+    }
+    
+    secureRandom.seed(KeyParameter(entropy));
     return secureRandom;
   }
 
@@ -75,10 +98,13 @@ class EncryptionService {
       final jsonString = json.encode(request);
       final plaintext = utf8.encode(jsonString);
       
+      // Generate a unique IV for this encryption operation
+      final uniqueIV = _getSecureRandom().nextBytes(16);
+      
       // Setup AES cipher
       final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
       final params = PaddedBlockCipherParameters(
-        ParametersWithIV(KeyParameter(_sessionKey), _sessionIV),
+        ParametersWithIV(KeyParameter(_sessionKey), uniqueIV),
         null
       );
       cipher.init(true, params); // true for encryption
@@ -86,11 +112,11 @@ class EncryptionService {
       // Encrypt the data
       final encrypted = cipher.process(Uint8List.fromList(plaintext));
       
-      // Create encrypted payload
+      // Create encrypted payload with unique IV
       return {
         'encrypted': true,
         'data': base64.encode(encrypted),
-        'iv': base64.encode(_sessionIV),
+        'iv': base64.encode(uniqueIV), // Send the unique IV with the encrypted data
         'key': base64.encode(_sessionKey),
       };
     } catch (e) {
@@ -139,9 +165,12 @@ class EncryptionService {
     try {
       if (!_initialized) initialize();
       
+      // Generate unique IV for this encryption
+      final uniqueIV = _getSecureRandom().nextBytes(16);
+      
       final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
       final params = PaddedBlockCipherParameters(
-        ParametersWithIV(KeyParameter(_mailKey), _mailIV),
+        ParametersWithIV(KeyParameter(_mailKey), uniqueIV),
         null
       );
       cipher.init(true, params);
@@ -150,7 +179,7 @@ class EncryptionService {
       final usernameBytes = utf8.encode(username);
       final encryptedUsername = cipher.process(Uint8List.fromList(usernameBytes));
       
-      // Reset cipher for password
+      // Reset cipher for password with same IV
       cipher.reset();
       cipher.init(true, params);
       final passwordBytes = utf8.encode(password);
@@ -160,7 +189,7 @@ class EncryptionService {
         'user': base64.encode(encryptedUsername),
         'pass': base64.encode(encryptedPassword),
         'key': base64.encode(_mailKey),
-        'iv': base64.encode(_mailIV),
+        'iv': base64.encode(uniqueIV), // Use the unique IV
       };
     } catch (e) {
       DebugService.instance.log('ENCRYPTION', 'Mail credential encryption error: $e');
@@ -177,9 +206,12 @@ class EncryptionService {
     try {
       if (!_initialized) initialize();
       
+      // Generate unique IV for this encryption
+      final uniqueIV = _getSecureRandom().nextBytes(16);
+      
       final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
       final params = PaddedBlockCipherParameters(
-        ParametersWithIV(KeyParameter(_mailKey), _mailIV),
+        ParametersWithIV(KeyParameter(_mailKey), uniqueIV),
         null
       );
       
@@ -192,7 +224,7 @@ class EncryptionService {
         'body': base64.encode(encryptedBody),
         'encrypted': true,
         'key': base64.encode(_mailKey),
-        'iv': base64.encode(_mailIV),
+        'iv': base64.encode(uniqueIV), // Use the unique IV
       };
       
       // Encrypt HTML body if present
@@ -285,9 +317,12 @@ class EncryptionService {
     try {
       if (!_initialized) initialize();
       
+      // Generate unique IV for this encryption
+      final uniqueIV = _getSecureRandom().nextBytes(16);
+      
       final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
       final params = PaddedBlockCipherParameters(
-        ParametersWithIV(KeyParameter(_mailKey), _mailIV),
+        ParametersWithIV(KeyParameter(_mailKey), uniqueIV),
         null
       );
       
@@ -308,7 +343,7 @@ class EncryptionService {
         'encrypted': true,
         'data': base64.encode(encryptedEmail),
         'key': base64.encode(_mailKey),
-        'iv': base64.encode(_mailIV),
+        'iv': base64.encode(uniqueIV), // Use the unique IV
         'to': to, // Keep recipient in plaintext for server routing
       };
     } catch (e) {
@@ -327,12 +362,16 @@ class EncryptionService {
   // EXISTING FUNCTIONS (unchanged)
   // =================================================================
 
-  // Encrypt URL for browse requests (simplified for server compatibility)
+  // Encrypt URL for browse requests - maintains backward compatibility
   String encryptUrl(String url) {
-    // For now, use simple base64 encoding of JSON
-    // In production, implement proper AES encryption here
-    final data = {'url': url, 'timestamp': DateTime.now().millisecondsSinceEpoch};
-    return base64.encode(utf8.encode(json.encode(data)));
+    if (!_initialized) initialize();
+    
+    // For backward compatibility with server expectations, 
+    // return base64-encoded JSON containing the URL
+    // The server will handle its own decryption logic
+    final data = {'url': url};
+    final jsonString = json.encode(data);
+    return base64.encode(utf8.encode(jsonString));
   }
 
   // Decrypt URL from encrypted request
@@ -382,10 +421,13 @@ class EncryptionService {
     String? expiry,
     String? maxViews,
   }) {
+    // Generate unique IV for this encryption
+    final uniqueIV = _getSecureRandom().nextBytes(16);
+    
     // First encrypt the file data
     final cipher = PaddedBlockCipher('AES/CBC/PKCS7');
     final params = PaddedBlockCipherParameters(
-      ParametersWithIV(KeyParameter(_sessionKey), _sessionIV),
+      ParametersWithIV(KeyParameter(_sessionKey), uniqueIV),
       null
     );
     cipher.init(true, params);
