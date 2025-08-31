@@ -140,7 +140,11 @@ class Pop3MailService with ChangeNotifier {
   Future<Map<String, String>> _getAuthenticatedHeaders() async {
     if (_authService != null) {
       await _authService!.ensureAuthenticated();
-      return _authService!.getAuthHeaders();
+      final headers = _authService!.getAuthHeaders();
+      // CRITICAL: Add Content-Type for JSON body parsing on server
+      headers['Content-Type'] = 'application/json';
+      headers['Accept'] = 'application/json';
+      return headers;
     }
     
     // Fallback to legacy headers if AuthService not available
@@ -271,6 +275,7 @@ class Pop3MailService with ChangeNotifier {
     try {
       DebugService.instance.logMail('Attempting to connect with username: $username');
       _isLoading = true;
+      notifyListeners(); // Immediately update UI to show loading state
       _username = username;
       _lastError = '';
 
@@ -582,13 +587,10 @@ Future<void> _prefetchRecentMessages() async {
     }
 
     try {
+      final headers = await _getAuthenticatedHeaders();
       final response = await _httpClient.delete(
         Uri.parse('$_serverBaseUrl/api/v1/mail/$messageId'),
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'User-Agent': appUserAgent,
-        },
+        headers: headers,
         body: json.encode({
           'credentials': _encryptedCredentials!.toJson(),
         }),
@@ -700,7 +702,24 @@ Future<void> _prefetchRecentMessages() async {
     await _updateMessageList();
   }
 
-  void disconnect() {
+  void disconnect() async {
+    // Call logout endpoint to clean up server-side connection
+    if (_encryptedCredentials != null) {
+      try {
+        final headers = await _getAuthenticatedHeaders();
+        await _httpClient.post(
+          Uri.parse('$_serverBaseUrl/api/v1/mail/logout'),
+          headers: headers,
+          body: json.encode({
+            'credentials': _encryptedCredentials!.toJson(),
+          }),
+        ).timeout(const Duration(seconds: 5));
+        DebugService.instance.logMail('Logged out successfully');
+      } catch (e) {
+        DebugService.instance.logMail('Logout request failed: $e');
+      }
+    }
+    
     _isConnected = false;
     _isSending = false;
     _username = null;

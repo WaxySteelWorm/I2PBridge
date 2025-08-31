@@ -458,6 +458,26 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
               return _cleanupAndReturn(response.body);
             }
 
+          } else if (response.statusCode == 401 || response.statusCode == 403) {
+            // Authentication error - try to handle TOKEN_OUTDATED
+            try {
+              final jsonResponse = jsonDecode(response.body);
+              if (jsonResponse['code'] == 'TOKEN_OUTDATED') {
+                _log('Token outdated - clearing and re-authenticating');
+                final authService = Provider.of<AuthService>(context, listen: false);
+                await authService.handleAuthError(errorResponse: jsonResponse);
+                // Retry the request with new token
+                if (attempt < maxRetries) {
+                  continue; // Retry with new token
+                }
+              }
+              throw Exception(jsonResponse['message'] ?? jsonResponse['error'] ?? 'Authentication failed');
+            } catch (e) {
+              if (e.toString().contains('TOKEN_OUTDATED')) {
+                rethrow;
+              }
+              throw Exception('Authentication failed. Please check your API key.');
+            }
           } else if (response.statusCode == 503) {
             // Service unavailable - check for custom message
             try {

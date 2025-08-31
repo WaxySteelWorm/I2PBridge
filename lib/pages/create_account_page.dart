@@ -56,7 +56,11 @@ class _CreateAccountPageState extends State<CreateAccountPage> {
     try {
       final authService = Provider.of<AuthService>(context, listen: false);
       await authService.ensureAuthenticated();
-      return authService.getAuthHeaders();
+      final headers = authService.getAuthHeaders();
+      // CRITICAL: Add Content-Type for JSON body parsing on server
+      headers['Content-Type'] = 'application/json';
+      headers['Accept'] = 'application/json';
+      return headers;
     } catch (e) {
       // Fallback to basic headers if authentication fails
       return {

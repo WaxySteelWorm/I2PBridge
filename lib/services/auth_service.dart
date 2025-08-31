@@ -32,6 +32,21 @@ class AuthService extends ChangeNotifier {
   
   /// Initialize authentication on startup
   Future<void> _initializeAuth() async {
+    // Check if API key has changed
+    final prefs = await SharedPreferences.getInstance();
+    final storedApiKeyHash = prefs.getString('api_key_hash');
+    final currentApiKeyHash = _apiKey != null ? _apiKey.hashCode.toString() : null;
+    
+    if (storedApiKeyHash != null && currentApiKeyHash != null && storedApiKeyHash != currentApiKeyHash) {
+      debugPrint('⚠️ AUTH: API key has changed - clearing old token');
+      await _clearStoredToken();
+    }
+    
+    // Store current API key hash
+    if (currentApiKeyHash != null) {
+      await prefs.setString('api_key_hash', currentApiKeyHash);
+    }
+    
     await _loadStoredToken();
     
     // Small delay to ensure API key is loaded properly
@@ -289,8 +304,14 @@ class AuthService extends ChangeNotifier {
   }
   
   /// Handle authentication errors (e.g., 401 responses)
-  Future<void> handleAuthError() async {
+  Future<void> handleAuthError({Map<String, dynamic>? errorResponse}) async {
     debugPrint('🔄 AUTH: Handling authentication error...');
+    
+    // Check if this is a TOKEN_OUTDATED error
+    if (errorResponse != null && errorResponse['code'] == 'TOKEN_OUTDATED') {
+      debugPrint('⚠️ AUTH: Token outdated - clearing old token and re-authenticating');
+    }
+    
     await _clearStoredToken();
     
     // Try to re-authenticate automatically
@@ -300,6 +321,13 @@ class AuthService extends ChangeNotifier {
       debugPrint('❌ AUTH: Re-authentication failed: $e');
       rethrow;
     }
+  }
+  
+  /// Force clear cached token and re-authenticate
+  Future<void> forceReauthenticate() async {
+    debugPrint('🔄 AUTH: Force re-authentication requested');
+    await _clearStoredToken();
+    await authenticate();
   }
 }
 
