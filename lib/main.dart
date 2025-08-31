@@ -26,7 +26,13 @@ void main(List<String> args) {
     MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
       providers: [
         ChangeNotifierProvider(create: (context) => AuthService()),
-        ChangeNotifierProvider(create: (context) => IrcService()),
+        ChangeNotifierProxyProvider<AuthService, IrcService>(
+          create: (context) => IrcService(),
+          update: (context, authService, ircService) {
+            ircService?.setAuthService(authService);
+            return ircService!;
+          },
+        ),
         ChangeNotifierProvider(create: (context) => Pop3MailService()),  // Add this line
       ],
       child: const I2PBridgeApp(),

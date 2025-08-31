@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/export.dart';
 import 'package:crypto/crypto.dart';
+import 'package:provider/provider.dart';
+import 'auth_service.dart';
 import 'debug_service.dart';
 
 class ParsedMessage {
@@ -29,6 +31,7 @@ class ParsedMessage {
 
 class IrcService with ChangeNotifier {
   WebSocketChannel? _channel;
+  AuthService? _authService;
   
   // Encryption components
   Uint8List? _sessionKey;
@@ -160,37 +163,62 @@ class IrcService with ChangeNotifier {
     }
   }
 
-  void connect(String initialChannel) {
+  void setAuthService(AuthService authService) {
+    _authService = authService;
+  }
+  
+  Future<void> connect(String initialChannel) async {
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
     _lastChannel = initialChannel; // Store the channel to join
     
-    _loadSettings().then((_) {
-      try {
-        // Create pinned HTTP client for WebSocket
-        final httpClient = _createPinnedHttpClient();
-        final wsUrl = Uri.parse('wss://bridge.stormycloud.org');
-        _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
-
-        _isConnected = true;
-        _buffers.clear();
-        _unreadBuffers.clear();
-        _userLists.clear();
-        _currentBuffer = 'Status';
-        _encryptionReady = false;
-        
-        _buffers['Status'] = [ParsedMessage(
-          sender: 'Status', 
-          content: 'Establishing secure connection...',
-        )];
-        notifyListeners();
-      } catch (e) {
-        _isConnected = false;
-        _addMessage(to: 'Status', sender: 'Error', content: 'Failed to connect: Service may be temporarily disabled');
+    debugPrint('IRC: Starting connection process...');
+    await _loadSettings();
+    
+    try {
+      // Ensure we have authentication
+      if (_authService == null) {
+        debugPrint('IRC: AuthService is null!');
+        _addMessage(to: 'Status', sender: 'Error', content: 'Authentication service not available');
         notifyListeners();
         return;
       }
+      
+      debugPrint('IRC: Ensuring authentication...');
+      await _authService!.ensureAuthenticated();
+      final token = _authService!.token;
+      
+      if (token == null) {
+        debugPrint('IRC: Token is null after authentication!');
+        _addMessage(to: 'Status', sender: 'Error', content: 'Authentication required. Please check your API key.');
+        notifyListeners();
+        return;
+      }
+      
+      debugPrint('IRC: Got JWT token, connecting to WebSocket...');
+      debugPrint('IRC: Token length: ${token.length}');
+      
+      // Create pinned HTTP client for WebSocket
+      final httpClient = _createPinnedHttpClient();
+      // Include token in WebSocket URL as query parameter
+      final wsUrl = Uri.parse('wss://bridge.stormycloud.org?token=$token');
+      debugPrint('IRC: WebSocket URL: ${wsUrl.toString().replaceAll(token, '[TOKEN]')}');
+      _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
 
+      _isConnected = true;
+      _buffers.clear();
+      _unreadBuffers.clear();
+      _userLists.clear();
+      _currentBuffer = 'Status';
+      _encryptionReady = false;
+      
+      _buffers['Status'] = [ParsedMessage(
+        sender: 'Status', 
+        content: 'Establishing secure connection...',
+      )];
+      notifyListeners();
+      
+      // Set up WebSocket listeners
       bool registrationComplete = false;
       bool hasJoinedChannel = false;
 
@@ -314,7 +342,13 @@ class IrcService with ChangeNotifier {
           notifyListeners();
         },
       );
-    });
+    } catch (e) {
+      debugPrint('IRC: Connection error: $e');
+      _isConnected = false;
+      _addMessage(to: 'Status', sender: 'Error', content: 'Failed to connect: $e');
+      notifyListeners();
+      return;
+    }
   }
 
   void _sendEncryptedMessage(String message) {
