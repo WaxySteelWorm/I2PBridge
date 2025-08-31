@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>I2P Bridge Admin Dashboard</title>
+    
+    <!-- ApexCharts -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.44.0/dist/apexcharts.min.js"></script>
+    
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #0f1525;
+            --bg-card: #141b2d;
+            --bg-hover: #1a2235;
+            --border: rgba(99, 110, 255, 0.15);
+            --text-primary: #e5e7eb;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #6366f1;
+            --accent-light: #818cf8;
+            --success: #22c55e;
+            --warning: #fb923c;
+            --danger: #ef4444;
+            --info: #06b6d4;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #0f1525 0%, #1a2235 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 1.5rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+        
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), var(--accent-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .live-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            background: rgba(34, 197, 94, 0.1);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            border-radius: 20px;
+            color: var(--success);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--success);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        /* Tabs */
+        .tabs {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            padding: 0 2rem;
+            overflow-x: auto;
+        }
+        
+        .tabs-inner {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            gap: 1rem;
+        }
+        
+        .tab {
+            padding: 1rem 1.5rem;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            font-weight: 500;
+            cursor: pointer;
+            position: relative;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .tab:hover {
+            color: var(--text-primary);
+        }
+        
+        .tab.active {
+            color: var(--accent-light);
+        }
+        
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-light));
+            border-radius: 3px 3px 0 0;
+        }
+        
+        /* Main Content */
+        .main {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        /* Grid Layout */
+        .grid {
+            display: grid;
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+        
+        .grid-4 {
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        }
+        
+        .grid-2 {
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+        }
+        
+        /* Cards */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.3s;
+        }
+        
+        .card:hover {
+            border-color: rgba(99, 110, 255, 0.3);
+            box-shadow: 0 4px 20px rgba(99, 110, 255, 0.1);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .card-badge {
+            padding: 0.25rem 0.75rem;
+            background: rgba(99, 110, 255, 0.1);
+            border: 1px solid rgba(99, 110, 255, 0.3);
+            border-radius: 12px;
+            font-size: 0.75rem;
+            color: var(--accent-light);
+        }
+        
+        /* Metric Cards */
+        .metric-card {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--accent), var(--accent-light));
+        }
+        
+        .metric-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            line-height: 1;
+            margin: 0.5rem 0;
+            background: linear-gradient(135deg, #fff, var(--text-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .metric-label {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .metric-change {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            margin-top: 0.5rem;
+            padding: 0.25rem 0.5rem;
+            background: rgba(34, 197, 94, 0.1);
+            border-radius: 6px;
+            font-size: 0.75rem;
+            color: var(--success);
+        }
+        
+        .metric-change.down {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+        }
+        
+        /* Charts */
+        .chart-container {
+            min-height: 350px;
+            position: relative;
+        }
+        
+        /* Tables */
+        .table-wrapper {
+            overflow-x: auto;
+            margin-top: 1rem;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th {
+            padding: 0.75rem;
+            text-align: left;
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border);
+        }
+        
+        td {
+            padding: 0.75rem;
+            border-bottom: 1px solid rgba(99, 110, 255, 0.05);
+            font-size: 0.875rem;
+        }
+        
+        tr:hover {
+            background: var(--bg-hover);
+        }
+        
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .badge-success {
+            background: rgba(34, 197, 94, 0.1);
+            color: var(--success);
+            border: 1px solid rgba(34, 197, 94, 0.2);
+        }
+        
+        .badge-warning {
+            background: rgba(251, 146, 60, 0.1);
+            color: var(--warning);
+            border: 1px solid rgba(251, 146, 60, 0.2);
+        }
+        
+        .badge-danger {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--danger);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+        
+        .badge-info {
+            background: rgba(6, 182, 212, 0.1);
+            color: var(--info);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+        }
+        
+        /* Buttons */
+        .btn {
+            padding: 0.5rem 1rem;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .btn:hover {
+            background: var(--accent-light);
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--bg-card);
+        }
+        
+        .btn-sm {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+        }
+        
+        /* Service Status */
+        .service-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        
+        .service-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            text-align: center;
+            transition: all 0.3s;
+        }
+        
+        .service-card.active {
+            border-color: rgba(34, 197, 94, 0.3);
+            background: linear-gradient(135deg, var(--bg-card), rgba(34, 197, 94, 0.05));
+        }
+        
+        .service-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(99, 110, 255, 0.1);
+            border-radius: 12px;
+            font-size: 1.5rem;
+        }
+        
+        .service-name {
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+        
+        .service-status {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+        }
+        
+        /* Loading */
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem;
+            color: var(--text-secondary);
+        }
+        
+        .spinner {
+            width: 24px;
+            height: 24px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 0.5rem;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-content {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .tabs {
+                padding: 0 1rem;
+            }
+            
+            .main {
+                padding: 1rem;
+            }
+            
+            .grid-4 {
+                grid-template-columns: 1fr;
+            }
+            
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">I2P Bridge Admin</div>
+            <div class="live-badge">
+                <div class="live-dot"></div>
+                <span id="connection-status">Connected</span>
+            </div>
+        </div>
+    </header>
+
+    <nav class="tabs">
+        <div class="tabs-inner">
+            <button class="tab active" data-tab="overview">📊 Overview</button>
+            <button class="tab" data-tab="analytics">📈 Analytics</button>
+            <button class="tab" data-tab="security">🔒 Security</button>
+            <button class="tab" data-tab="api">🔑 API Management</button>
+            <button class="tab" data-tab="services">⚙️ Services</button>
+            <button class="tab" data-tab="system">💻 System Health</button>
+        </div>
+    </nav>
+
+    <main class="main">
+        <!-- Overview Tab -->
+        <div class="tab-content active" id="overview">
+            <div class="grid grid-4">
+                <div class="card metric-card">
+                    <div class="metric-label">Total Connections</div>
+                    <div class="metric-value" id="total-connections">0</div>
+                    <div class="metric-change">↑ 12%</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Unique Users <span id="user-period" style="font-size: 0.7rem; color: var(--text-muted);">(24h)</span></div>
+                    <div class="metric-value" id="unique-users">0</div>
+                    <div class="metric-change" id="unique-users-change">↑ 0%</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Bandwidth Used</div>
+                    <div class="metric-value" id="bandwidth-total">0 GB</div>
+                    <div class="metric-change down">↓ 3%</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Cache Hit Rate</div>
+                    <div class="metric-value" id="cache-hit-rate">0%</div>
+                    <div class="metric-change">↑ 15%</div>
+                </div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Service Activity</h3>
+                        <span class="card-badge">Live</span>
+                    </div>
+                    <div id="service-activity-chart" class="chart-container"></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Platform Distribution</h3>
+                    </div>
+                    <div id="platform-chart" class="chart-container"></div>
+                </div>
+            </div>
+
+            <div class="grid grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">User Statistics by Service</h3>
+                    </div>
+                    <div class="table-wrapper">
+                        <table id="user-stats-table">
+                            <thead>
+                                <tr>
+                                    <th>Service</th>
+                                    <th>Unique Users</th>
+                                    <th>Sessions</th>
+                                    <th>Avg Duration</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td colspan="4" style="text-align: center;">Loading...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">User Trend</h3>
+                    </div>
+                    <div id="user-trend-chart" class="chart-container"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Recent Activity</h3>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Time</th>
+                                <th>Service</th>
+                                <th>Action</th>
+                                <th>User</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="recent-activity">
+                            <tr>
+                                <td colspan="5" class="loading">Loading activity...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Analytics Tab -->
+        <div class="tab-content" id="analytics">
+            <!-- Date Range Selector -->
+            <div class="card" style="margin-bottom: 1rem;">
+                <div style="display: flex; align-items: center; gap: 1rem; padding: 1rem;">
+                    <label style="color: #94a3b8;">Date Range:</label>
+                    <select id="date-range-preset" class="form-select" style="width: 150px; background: #1e293b; color: #f1f5f9; border: 1px solid #334155; padding: 0.5rem; border-radius: 6px;">
+                        <option value="1h">Last Hour</option>
+                        <option value="24h" selected>Last 24 Hours</option>
+                        <option value="7d">Last 7 Days</option>
+                        <option value="30d">Last 30 Days</option>
+                        <option value="custom">Custom Range</option>
+                    </select>
+                    <div id="custom-date-range" style="display: none; gap: 0.5rem; align-items: center;">
+                        <input type="datetime-local" id="date-from" class="form-input" style="background: #1e293b; color: #f1f5f9; border: 1px solid #334155; padding: 0.5rem; border-radius: 6px;">
+                        <span style="color: #94a3b8;">to</span>
+                        <input type="datetime-local" id="date-to" class="form-input" style="background: #1e293b; color: #f1f5f9; border: 1px solid #334155; padding: 0.5rem; border-radius: 6px;">
+                    </div>
+                    <button id="apply-date-range" class="btn btn-sm" style="background: #6366f1;">Apply</button>
+                    <button id="refresh-analytics" class="btn btn-sm btn-secondary">↻ Refresh</button>
+                </div>
+            </div>
+            
+            <div class="grid grid-2">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Bandwidth Usage</h3>
+                    </div>
+                    <div id="bandwidth-chart" class="chart-container"></div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title">Response Times</h3>
+                    </div>
+                    <div id="response-time-chart" class="chart-container"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Geographic Distribution</h3>
+                </div>
+                <div class="geo-container" style="display: flex; gap: 20px; padding: 20px;">
+                    <div style="flex: 1;">
+                        <div id="world-map" style="height: 400px; background: #1a1f2e; border-radius: 8px; position: relative;">
+                            <!-- SVG World Map -->
+                            <svg viewBox="0 0 1000 500" style="width: 100%; height: 100%;">
+                                <!-- Simplified world map paths will be added via JavaScript -->
+                            </svg>
+                            <div id="map-tooltip" style="position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 5px 10px; border-radius: 4px; display: none; font-size: 12px;"></div>
+                        </div>
+                    </div>
+                    <div style="width: 250px;">
+                        <h4 style="margin-top: 0; color: #94a3b8; font-size: 14px;">Top Countries</h4>
+                        <div id="top-countries-list">
+                            <!-- Will be populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">Device Analytics</h3>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Device</th>
+                                <th>Platform</th>
+                                <th>OS Version</th>
+                                <th>Sessions</th>
+                                <th>Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="device-table">
+                            <tr>
+                                <td colspan="5" class="loading">Loading devices...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Security Tab -->
+        <div class="tab-content" id="security">
+            <div class="grid grid-4">
+                <div class="card metric-card">
+                    <div class="metric-label">Blocked IPs</div>
+                    <div class="metric-value" id="blocked-ips">0</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Rate Limit Hits</div>
+                    <div class="metric-value" id="rate-limits">0</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Failed Auth</div>
+                    <div class="metric-value" id="failed-auth">0</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Security Score</div>
+                    <div class="metric-value" id="security-score">100</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">IP Blocklist</h3>
+                    <button class="btn btn-sm" id="block-ip-btn">Add IP</button>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>IP Address</th>
+                                <th>Reason</th>
+                                <th>Blocked At</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="blocked-ip-table">
+                            <tr>
+                                <td colspan="4" class="loading">No blocked IPs</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Management Tab -->
+        <div class="tab-content" id="api">
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">API Keys</h3>
+                    <button class="btn" id="generate-api-key-btn">Generate New Key</button>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Key ID</th>
+                                <th>Name</th>
+                                <th>Created</th>
+                                <th>Last Used</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="api-keys-table">
+                            <tr>
+                                <td colspan="6" class="loading">Loading API keys...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Services Tab -->
+        <div class="tab-content" id="services">
+            <div class="service-grid">
+                <div class="service-card active" id="service-irc">
+                    <div class="service-icon">💬</div>
+                    <div class="service-name">IRC Bridge</div>
+                    <div class="service-status">
+                        <span class="badge badge-success">Active</span>
+                    </div>
+                </div>
+                <div class="service-card active" id="service-browse">
+                    <div class="service-icon">🌐</div>
+                    <div class="service-name">Web Browse</div>
+                    <div class="service-status">
+                        <span class="badge badge-success">Active</span>
+                    </div>
+                </div>
+                <div class="service-card active" id="service-mail">
+                    <div class="service-icon">📧</div>
+                    <div class="service-name">Mail Service</div>
+                    <div class="service-status">
+                        <span class="badge badge-success">Active</span>
+                    </div>
+                </div>
+                <div class="service-card active" id="service-upload">
+                    <div class="service-icon">📤</div>
+                    <div class="service-name">File Upload</div>
+                    <div class="service-status">
+                        <span class="badge badge-success">Active</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-top: 2rem;">
+                <div class="card-header">
+                    <h3 class="card-title">Service Configuration</h3>
+                </div>
+                <div class="table-wrapper">
+                    <table id="services-config">
+                        <thead>
+                            <tr>
+                                <th>Service</th>
+                                <th>Port</th>
+                                <th>Rate Limit</th>
+                                <th>Max Connections</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-service="irc">
+                                <td>IRC Bridge</td>
+                                <td>6668</td>
+                                <td>100/min</td>
+                                <td>500</td>
+                                <td><button class="btn btn-sm btn-secondary rate-limit-btn" data-service="irc">Configure</button></td>
+                            </tr>
+                            <tr data-service="browse">
+                                <td>Web Browse</td>
+                                <td>443</td>
+                                <td>200/min</td>
+                                <td>1000</td>
+                                <td><button class="btn btn-sm btn-secondary rate-limit-btn" data-service="browse">Configure</button></td>
+                            </tr>
+                            <tr data-service="mail">
+                                <td>Mail Service</td>
+                                <td>8110/8025</td>
+                                <td>50/min</td>
+                                <td>200</td>
+                                <td><button class="btn btn-sm btn-secondary rate-limit-btn" data-service="mail">Configure</button></td>
+                            </tr>
+                            <tr data-service="upload">
+                                <td>File Upload</td>
+                                <td>443</td>
+                                <td>20/min</td>
+                                <td>100</td>
+                                <td><button class="btn btn-sm btn-secondary rate-limit-btn" data-service="upload">Configure</button></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- System Health Tab -->
+        <div class="tab-content" id="system">
+            <div class="grid grid-4">
+                <div class="card metric-card">
+                    <div class="metric-label">CPU Usage</div>
+                    <div class="metric-value" id="cpu-usage">12%</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Memory</div>
+                    <div class="metric-value" id="memory-usage">2.4 GB</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Disk Usage</div>
+                    <div class="metric-value" id="disk-usage">45%</div>
+                </div>
+                <div class="card metric-card">
+                    <div class="metric-label">Uptime</div>
+                    <div class="metric-value" id="uptime">7d 14h</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <h3 class="card-title">System Logs</h3>
+                </div>
+                <div style="background: #0a0e1a; padding: 1rem; border-radius: 8px; font-family: monospace; font-size: 0.875rem; max-height: 400px; overflow-y: auto;">
+                    <div id="system-logs" style="white-space: pre-wrap;">Loading logs...</div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Load the external dashboard script -->
+    <script src="/js/admin-dashboard.js?v=3"></script>
+    
+    <script>
+        // Tab switching
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                const targetId = this.dataset.tab;
+                
+                // Update active tab
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                
+                // Update active content
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                document.getElementById(targetId).classList.add('active');
+            });
+        });
+
+        // Dashboard is initialized in admin-dashboard.js
+    </script>
+</body>

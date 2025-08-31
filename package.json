@@ -1,0 +1,34 @@
+{
+  "name": "i2p-bridge-server",
+  "version": "1.0.0",
+  "description": "I2P Bridge Server with secure authentication",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "debug": "node server.js --debug",
+    "setup": "node setup.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "ws": "^8.13.0",
+    "axios": "^1.4.0",
+    "multer": "^1.4.5-lts.1",
+    "form-data": "^4.0.0",
+    "mailparser": "^3.6.5",
+    "sqlite3": "^5.1.6",
+    "jsonwebtoken": "^9.0.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "i2p",
+    "bridge",
+    "proxy",
+    "anonymous",
+    "secure"
+  ],
+  "author": "I2P Bridge Team",
+  "license": "MIT"
+}
