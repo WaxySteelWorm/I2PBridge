@@ -228,14 +228,33 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         final responseBody = await streamedResponse.stream.bytesToString();
         final decodedBody = json.decode(responseBody);
         
-        DebugService.instance.logUpload('Upload response: ${streamedResponse.statusCode} - ${responseBody.length} bytes');
+        DebugService.instance.logUpload('Upload response: ${streamedResponse.statusCode} - Body: $responseBody');
 
         if (streamedResponse.statusCode == 200) {
           final rawUrl = decodedBody['url'];
-          final uri = Uri.tryParse(rawUrl);
-          String finalUrl = (uri != null && uri.hasAbsolutePath) 
-            ? 'http://drop.i2p${uri.path}' 
-            : 'http://drop.i2p/uploads/$rawUrl';
+          DebugService.instance.logUpload('Extracted URL from response: $rawUrl');
+          
+          // Check if there's debug info about missing URL
+          if (decodedBody['debug'] != null) {
+            DebugService.instance.logUpload('Debug info from server: ${json.encode(decodedBody['debug'])}');
+          }
+          
+          // Transform clearnet URL to I2P URL (server may return clearnet URL)
+          String finalUrl;
+          if (rawUrl != null && rawUrl.toString().isNotEmpty && !rawUrl.toString().contains('/error')) {
+            // Server already transformed the URL, just use it
+            finalUrl = rawUrl.toString();
+            DebugService.instance.logUpload('Using server-provided URL: $finalUrl');
+          } else {
+            // Fallback if URL is empty or error
+            finalUrl = 'http://drop.i2p/upload/error';
+            DebugService.instance.logUpload('Using fallback error URL');
+            
+            // Show additional error info if available
+            if (decodedBody['error'] != null) {
+              throw Exception(decodedBody['error']);
+            }
+          }
           
           setState(() { 
             _successfulUrl = finalUrl; 
@@ -268,7 +287,18 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           setState(() => _isLoading = false);
           return; // Exit early for service unavailable
         } else {
-          throw Exception(decodedBody['message'] ?? 'Upload failed');
+          // Extract error message from response
+          String errorMessage = 'Upload failed';
+          String errorDetails = '';
+          
+          try {
+            errorMessage = decodedBody['error'] ?? decodedBody['message'] ?? errorMessage;
+            errorDetails = decodedBody['details'] ?? '';
+          } catch (e) {
+            // Use default message
+          }
+          
+          throw Exception(errorDetails.isNotEmpty ? '$errorMessage: $errorDetails' : errorMessage);
         }
       } on SocketException {
         if (i == maxRetries - 1) {
@@ -282,13 +312,21 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         }
       } catch (e) {
         if (i == maxRetries - 1) {
+          // Parse error message for better user feedback
+          String errorDisplay = e.toString();
+          if (errorDisplay.startsWith('Exception: ')) {
+            errorDisplay = errorDisplay.substring(11);
+          }
+          
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Upload failed after $maxRetries attempts: ${e.toString()}'),
+              content: Text('Upload failed: $errorDisplay'),
               backgroundColor: Colors.red,
-              duration: const Duration(seconds: 3),
+              duration: const Duration(seconds: 5),
             ),
           );
+          
+          DebugService.instance.logUpload('Upload failed after $maxRetries attempts: $errorDisplay');
         }
       }
     }
@@ -440,7 +478,10 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
                     items: const [
                       DropdownMenuItem(value: '15m', child: Text('15 minutes')),
                       DropdownMenuItem(value: '1h', child: Text('1 hour')),
-                      DropdownMenuItem(value: '6h', child: Text('6 hours')),
+                      DropdownMenuItem(value: '2h', child: Text('2 hours')),
+                      DropdownMenuItem(value: '4h', child: Text('4 hours')),
+                      DropdownMenuItem(value: '8h', child: Text('8 hours')),
+                      DropdownMenuItem(value: '12h', child: Text('12 hours')),
                       DropdownMenuItem(value: '24h', child: Text('24 hours')),
                       DropdownMenuItem(value: '48h', child: Text('48 hours')),
                     ],
