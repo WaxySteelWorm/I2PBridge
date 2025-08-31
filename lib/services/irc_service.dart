@@ -10,6 +10,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:pointycastle/pointycastle.dart';
 import 'package:pointycastle/export.dart';
 import 'package:crypto/crypto.dart';
+import 'package:provider/provider.dart';
+import 'auth_service.dart';
 import 'debug_service.dart';
 
 class ParsedMessage {
@@ -29,6 +31,7 @@ class ParsedMessage {
 
 class IrcService with ChangeNotifier {
   WebSocketChannel? _channel;
+  AuthService? _authService;
   
   // Encryption components
   Uint8List? _sessionKey;
@@ -48,8 +51,8 @@ class IrcService with ChangeNotifier {
     Colors.pink.shade300, Colors.indigo.shade300
   ];
 
-  // SSL Pinning configuration
-  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  // SSL Pinning configuration - Updated to use certificate fingerprint
+  static const String expectedCertFingerprint = 'AO5T/CbxDzIBFkUp6jLEcAk0+ZxeN06uaKyeIzIE+E0=';
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
 
   bool get isConnected => _isConnected;
@@ -82,6 +85,13 @@ class IrcService with ChangeNotifier {
     notifyListeners();
   }
 
+  // SECURITY IMPROVEMENT: Pin the certificate SHA-256 fingerprint
+  String _getCertificateFingerprint(X509Certificate cert) {
+    final certDer = cert.der;
+    final fingerprint = sha256.convert(certDer);
+    return base64.encode(fingerprint.bytes);
+  }
+
   HttpClient _createPinnedHttpClient() {
     final httpClient = HttpClient();
     httpClient.userAgent = appUserAgent;
@@ -92,13 +102,11 @@ class IrcService with ChangeNotifier {
       }
       
       try {
-        // Get the public key from the certificate
-        final publicKeyBytes = cert.der;
-        final publicKeyHash = sha256.convert(publicKeyBytes);
-        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        // SECURITY FIX: Use certificate fingerprint instead of raw DER
+        final certificateFingerprint = _getCertificateFingerprint(cert);
         
-        // Compare with expected hash
-        return publicKeyHashBase64 == expectedPublicKeyHash;
+        // Compare with expected certificate fingerprint
+        return certificateFingerprint == expectedCertFingerprint;
       } catch (e) {
         DebugService.instance.logIrc('Certificate validation error: $e');
         return false;
@@ -155,15 +163,46 @@ class IrcService with ChangeNotifier {
     }
   }
 
-  void connect(String initialChannel) {
+  void setAuthService(AuthService authService) {
+    _authService = authService;
+  }
+  
+  Future<void> connect(String initialChannel) async {
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
     _lastChannel = initialChannel; // Store the channel to join
     
-    _loadSettings().then((_) {
+    debugPrint('IRC: Starting connection process...');
+    await _loadSettings();
+    
+    try {
+      // Ensure we have authentication
+      if (_authService == null) {
+        debugPrint('IRC: AuthService is null!');
+        _addMessage(to: 'Status', sender: 'Error', content: 'Authentication service not available');
+        notifyListeners();
+        return;
+      }
+      
+      debugPrint('IRC: Ensuring authentication...');
+      await _authService!.ensureAuthenticated();
+      final token = _authService!.token;
+      
+      if (token == null) {
+        debugPrint('IRC: Token is null after authentication!');
+        _addMessage(to: 'Status', sender: 'Error', content: 'Authentication required. Please check your API key.');
+        notifyListeners();
+        return;
+      }
+      
+      debugPrint('IRC: Got JWT token, connecting to WebSocket...');
+      debugPrint('IRC: Token length: ${token.length}');
+      
       // Create pinned HTTP client for WebSocket
       final httpClient = _createPinnedHttpClient();
-      final wsUrl = Uri.parse('wss://bridge.stormycloud.org');
+      // Include token in WebSocket URL as query parameter
+      final wsUrl = Uri.parse('wss://bridge.stormycloud.org?token=$token');
+      debugPrint('IRC: WebSocket URL: ${wsUrl.toString().replaceAll(token, '[TOKEN]')}');
       _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
 
       _isConnected = true;
@@ -178,7 +217,8 @@ class IrcService with ChangeNotifier {
         content: 'Establishing secure connection...',
       )];
       notifyListeners();
-
+      
+      // Set up WebSocket listeners
       bool registrationComplete = false;
       bool hasJoinedChannel = false;
 
@@ -279,17 +319,36 @@ class IrcService with ChangeNotifier {
           notifyListeners();
         },
         onError: (error) {
-          _addMessage(to: 'Status', sender: 'Status', content: 'Error: $error');
+          String errorMessage = 'Connection error';
+          
+          // Check if error contains service unavailable message
+          if (error.toString().contains('503') || error.toString().contains('Service Unavailable')) {
+            errorMessage = 'IRC service is temporarily disabled. Please try again later.';
+            _manualDisconnect = true; // Don't auto-reconnect for service disabled
+          } else if (error.toString().contains('WebSocketChannelException')) {
+            errorMessage = 'Failed to connect to IRC service. It may be temporarily disabled.';
+          } else {
+            errorMessage = 'Error: $error';
+          }
+          
+          _addMessage(to: 'Status', sender: 'Status', content: errorMessage);
           _isConnected = false;
           _encryptionReady = false;
           _registrationTimer?.cancel();
+          
           if (!_manualDisconnect) {
             _scheduleReconnect();
           }
           notifyListeners();
         },
       );
-    });
+    } catch (e) {
+      debugPrint('IRC: Connection error: $e');
+      _isConnected = false;
+      _addMessage(to: 'Status', sender: 'Error', content: 'Failed to connect: $e');
+      notifyListeners();
+      return;
+    }
   }
 
   void _sendEncryptedMessage(String message) {

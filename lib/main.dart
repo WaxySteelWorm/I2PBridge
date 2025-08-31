@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'services/irc_service.dart';
 import 'services/pop3_mail_service.dart';  // Add this import
 import 'services/debug_service.dart';
+import 'services/auth_service.dart';
 import 'pages/enhanced_browser_page.dart';  // Changed from browser_page.dart
 import 'pages/upload_page.dart';
 import 'pages/irc_page.dart';
@@ -24,7 +25,14 @@ void main(List<String> args) {
   runApp(
     MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
       providers: [
-        ChangeNotifierProvider(create: (context) => IrcService()),
+        ChangeNotifierProvider(create: (context) => AuthService()),
+        ChangeNotifierProxyProvider<AuthService, IrcService>(
+          create: (context) => IrcService(),
+          update: (context, authService, ircService) {
+            ircService?.setAuthService(authService);
+            return ircService!;
+          },
+        ),
         ChangeNotifierProvider(create: (context) => Pop3MailService()),  // Add this line
       ],
       child: const I2PBridgeApp(),
@@ -55,19 +63,23 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
+  bool _showDebugBanner = false;
 
   @override
   void initState() {
     super.initState();
     // Check server debug status when app starts
     DebugService.instance.checkServerDebugStatus().then((_) {
-      // Rebuild UI if server debug mode was detected
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {
+          _showDebugBanner = DebugService.instance.serverDebugMode;
+        });
+      }
     });
   }
 
   static const List<String> _moduleTitles = <String>[
-    'HTTP Browser',
+    'I2P Browser',
     'IRC Chat',
     'I2P Mail',
     'Image Upload',
@@ -105,31 +117,26 @@ class _MainScaffoldState extends State<MainScaffold> {
       ),
       body: Column(
         children: [
-          // Server debug banner
-          if (DebugService.instance.serverDebugMode)
+          // Server debug banner (self-dismissable)
+          if (_showDebugBanner && DebugService.instance.serverDebugMode)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
-              color: Colors.orange.shade100,
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+              color: Colors.orange.withOpacity(0.1),
               child: Row(
                 children: [
-                  Icon(
-                    Icons.bug_report,
-                    size: 16,
-                    color: Colors.orange.shade800,
-                  ),
+                  const Icon(Icons.bug_report, color: Colors.orange, size: 18),
                   const SizedBox(width: 8),
-                  Expanded(
+                  const Expanded(
                     child: Text(
                       'Server debug mode active - detailed logging enabled on server',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.orange.shade800,
-                      ),
-                      
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
                     ),
                   ),
+                  TextButton(
+                    onPressed: () => setState(() => _showDebugBanner = false),
+                    child: const Text('DISMISS'),
+                  )
                 ],
               ),
             ),
@@ -142,15 +149,15 @@ class _MainScaffoldState extends State<MainScaffold> {
           ),
         ],
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        items: const <BottomNavigationBarItem>[
-          BottomNavigationBarItem(icon: Icon(Icons.public), label: 'Browser'),
-          BottomNavigationBarItem(icon: Icon(Icons.chat_bubble_outline), label: 'IRC'),
-          BottomNavigationBarItem(icon: Icon(Icons.mail_outline), label: 'Mail'),
-          BottomNavigationBarItem(icon: Icon(Icons.upload_file_outlined), label: 'Upload'),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: (index) => setState(() => _selectedIndex = index),
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.travel_explore), label: 'Browse'),
+          NavigationDestination(icon: Icon(Icons.forum_outlined), label: 'Chat'),
+          NavigationDestination(icon: Icon(Icons.mail_lock), label: 'Mail'),
+          NavigationDestination(icon: Icon(Icons.cloud_upload_outlined), label: 'Upload'),
         ],
-        currentIndex: _selectedIndex,
-        onTap: (index) => setState(() => _selectedIndex = index),
       ),
     );
   }

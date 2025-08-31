@@ -3,7 +3,9 @@
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shimmer/shimmer.dart';
 import '../services/pop3_mail_service.dart';
+import '../services/auth_service.dart';
 import 'compose_mail_page.dart';
 import 'read_mail_page.dart';
 import 'create_account_page.dart';
@@ -19,11 +21,20 @@ class _MailPageState extends State<MailPage> {
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   late Pop3MailService _mailService;
+  bool _obscurePassword = true;
   
   @override
   void initState() {
     super.initState();
     _mailService = Pop3MailService();
+  }
+  
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Inject AuthService into mail service when available
+    final authService = Provider.of<AuthService>(context, listen: false);
+    _mailService.setAuthService(authService);
   }
   
   @override
@@ -143,13 +154,16 @@ class _MailPageState extends State<MailPage> {
           
           TextField(
             controller: _passwordController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Password',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.lock_outline),
-              suffixIcon: Icon(Icons.security, color: Colors.green),
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.lock_outline),
+              suffixIcon: IconButton(
+                icon: Icon(_obscurePassword ? Icons.visibility_off : Icons.visibility),
+                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+              ),
             ),
-            obscureText: true,
+            obscureText: _obscurePassword,
           ),
           const SizedBox(height: 24),
           
@@ -431,8 +445,44 @@ class _MailPageState extends State<MailPage> {
 
   Widget _buildMessageList(Pop3MailService mailService) {
     if (mailService.isLoading && mailService.messages.isEmpty) {
-      return const Center(
-        child: CircularProgressIndicator(),
+      return ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        itemCount: 8,
+        itemBuilder: (context, index) {
+          return Card(
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Shimmer.fromColors(
+              baseColor: Colors.white10,
+              highlightColor: Colors.white24,
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(height: 12, width: double.infinity, color: Colors.white),
+                          const SizedBox(height: 8),
+                          Container(height: 12, width: 180, color: Colors.white),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       );
     }
     

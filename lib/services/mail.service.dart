@@ -1,12 +1,12 @@
-// lib/pages/mail_page.dart
+// lib/services/mail.service.dart
 // I2P Mail client with POP3/SMTP
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import '../services/pop3_mail_service.dart';
-import 'compose_mail_page.dart';
-import 'read_mail_page.dart';
+import 'pop3_mail_service.dart';
+import '../pages/compose_mail_page.dart';
+import '../pages/read_mail_page.dart';
 
 class MailPage extends StatefulWidget {
   const MailPage({super.key});
@@ -216,9 +216,8 @@ class _MailPageState extends State<MailPage> {
   }
 
   Widget _buildDebugSection(Pop3MailService mailService) {
-    if (!mailService.debugMode || mailService.debugLog.isEmpty) {
-      return const SizedBox.shrink();
-    }
+    // Debug section removed - Pop3MailService doesn't have debugMode
+    return const SizedBox.shrink();
     
     return Column(
       children: [
@@ -252,10 +251,10 @@ class _MailPageState extends State<MailPage> {
                     const Divider(),
                     Expanded(
                       child: ListView.builder(
-                        itemCount: mailService.debugLog.length,
+                        itemCount: 0, // Debug log not available
                         itemBuilder: (context, index) {
-                          return Text(
-                            mailService.debugLog[index],
+                          return const Text(
+                            '',
                             style: const TextStyle(
                               fontFamily: 'monospace',
                               fontSize: 12,
@@ -270,7 +269,7 @@ class _MailPageState extends State<MailPage> {
             );
           },
           icon: const Icon(Icons.bug_report),
-          label: Text('View Debug Log (${mailService.debugLog.length})'),
+          label: const Text('View Debug Log'),
         ),
       ],
     );

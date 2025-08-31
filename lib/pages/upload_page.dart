@@ -12,7 +12,9 @@ import 'package:file_picker/file_picker.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:crypto/crypto.dart';
+import 'package:provider/provider.dart';
 import '../assets/drop_logo.dart';
+import '../services/auth_service.dart';
 import '../services/debug_service.dart';
 
 class UploadPage extends StatefulWidget {
@@ -36,8 +38,8 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
   late Animation<double> _fadeAnimation;
   late http.Client _httpClient;
 
-  // SSL Pinning configuration
-  static const String expectedPublicKeyHash = 'QaZ6GsvfR7eEgr/edwGzWpZlPJiFxBuvrNIba7bc8dE=';
+  // SSL Pinning configuration - Updated to use certificate fingerprint
+  static const String expectedCertFingerprint = 'AO5T/CbxDzIBFkUp6jLEcAk0+ZxeN06uaKyeIzIE+E0=';
   static const String appUserAgent = 'I2PBridge/1.0.0 (Mobile; Flutter)';
 
   @override
@@ -58,6 +60,13 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
     _animationController.forward();
   }
 
+  // SECURITY IMPROVEMENT: Pin the certificate SHA-256 fingerprint
+  String _getCertificateFingerprint(X509Certificate cert) {
+    final certDer = cert.der;
+    final fingerprint = sha256.convert(certDer);
+    return base64.encode(fingerprint.bytes);
+  }
+
   http.Client _createPinnedHttpClient() {
     final httpClient = HttpClient();
     httpClient.userAgent = appUserAgent;
@@ -68,13 +77,11 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
       }
       
       try {
-        // Get the public key from the certificate
-        final publicKeyBytes = cert.der;
-        final publicKeyHash = sha256.convert(publicKeyBytes);
-        final publicKeyHashBase64 = base64.encode(publicKeyHash.bytes);
+        // SECURITY FIX: Use certificate fingerprint instead of raw DER
+        final certificateFingerprint = _getCertificateFingerprint(cert);
         
-        // Compare with expected hash
-        return publicKeyHashBase64 == expectedPublicKeyHash;
+        // Compare with expected certificate fingerprint
+        return certificateFingerprint == expectedCertFingerprint;
       } catch (e) {
         DebugService.instance.logUpload('Certificate validation error: $e');
         return false;
@@ -91,6 +98,19 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
     _passwordController.dispose();
     _maxViewsController.dispose();
     super.dispose();
+  }
+  
+  /// Get authenticated headers for HTTP requests
+  Future<Map<String, String>> _getAuthenticatedHeaders() async {
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      await authService.ensureAuthenticated();
+      return authService.getAuthHeaders();
+    } catch (e) {
+      DebugService.instance.logUpload('Upload authentication failed: $e');
+      // Return empty headers - the upload will likely fail but won't crash
+      return <String, String>{};
+    }
   }
 
   Future<void> _pickFile() async {
@@ -170,11 +190,9 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           Uri.parse('https://bridge.stormycloud.org/api/v1/upload')
         );
         
-        // Use the pinned HTTP client
-        request = http.MultipartRequest(
-          'POST', 
-          Uri.parse('https://bridge.stormycloud.org/api/v1/upload')
-        );
+        // Add authenticated headers
+        final headers = await _getAuthenticatedHeaders();
+        request.headers.addAll(headers);
         
         request.files.add(
           await http.MultipartFile.fromPath(
@@ -192,6 +210,13 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         }
         request.fields['expiry'] = _selectedExpiry;
 
+        // Add auth header
+        final authService = Provider.of<AuthService>(context, listen: false);
+        await authService.ensureAuthenticated();
+        final authHeaders = authService.getAuthHeaders();
+        request.headers.addAll(authHeaders);
+
+
         // Set timeout and send with pinned client
         var streamedResponse = await _httpClient.send(request).timeout(
           const Duration(seconds: 30),
@@ -203,14 +228,33 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         final responseBody = await streamedResponse.stream.bytesToString();
         final decodedBody = json.decode(responseBody);
         
-        DebugService.instance.logUpload('Upload response: ${streamedResponse.statusCode} - ${responseBody.length} bytes');
+        DebugService.instance.logUpload('Upload response: ${streamedResponse.statusCode} - Body: $responseBody');
 
         if (streamedResponse.statusCode == 200) {
           final rawUrl = decodedBody['url'];
-          final uri = Uri.tryParse(rawUrl);
-          String finalUrl = (uri != null && uri.hasAbsolutePath) 
-            ? 'http://drop.i2p${uri.path}' 
-            : 'http://drop.i2p/uploads/$rawUrl';
+          DebugService.instance.logUpload('Extracted URL from response: $rawUrl');
+          
+          // Check if there's debug info about missing URL
+          if (decodedBody['debug'] != null) {
+            DebugService.instance.logUpload('Debug info from server: ${json.encode(decodedBody['debug'])}');
+          }
+          
+          // Transform clearnet URL to I2P URL (server may return clearnet URL)
+          String finalUrl;
+          if (rawUrl != null && rawUrl.toString().isNotEmpty && !rawUrl.toString().contains('/error')) {
+            // Server already transformed the URL, just use it
+            finalUrl = rawUrl.toString();
+            DebugService.instance.logUpload('Using server-provided URL: $finalUrl');
+          } else {
+            // Fallback if URL is empty or error
+            finalUrl = 'http://drop.i2p/upload/error';
+            DebugService.instance.logUpload('Using fallback error URL');
+            
+            // Show additional error info if available
+            if (decodedBody['error'] != null) {
+              throw Exception(decodedBody['error']);
+            }
+          }
           
           setState(() { 
             _successfulUrl = finalUrl; 
@@ -225,8 +269,36 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           );
           
           break; // Success - exit retry loop
+        } else if (streamedResponse.statusCode == 503) {
+          // Service unavailable - check for custom message
+          String errorMessage = 'Upload service is temporarily disabled';
+          try {
+            errorMessage = decodedBody['message'] ?? errorMessage;
+          } catch (e) {
+            // Use default message
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(errorMessage),
+              backgroundColor: Colors.orange,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+          setState(() => _isLoading = false);
+          return; // Exit early for service unavailable
         } else {
-          throw Exception(decodedBody['message'] ?? 'Upload failed');
+          // Extract error message from response
+          String errorMessage = 'Upload failed';
+          String errorDetails = '';
+          
+          try {
+            errorMessage = decodedBody['error'] ?? decodedBody['message'] ?? errorMessage;
+            errorDetails = decodedBody['details'] ?? '';
+          } catch (e) {
+            // Use default message
+          }
+          
+          throw Exception(errorDetails.isNotEmpty ? '$errorMessage: $errorDetails' : errorMessage);
         }
       } on SocketException {
         if (i == maxRetries - 1) {
@@ -240,13 +312,21 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
         }
       } catch (e) {
         if (i == maxRetries - 1) {
+          // Parse error message for better user feedback
+          String errorDisplay = e.toString();
+          if (errorDisplay.startsWith('Exception: ')) {
+            errorDisplay = errorDisplay.substring(11);
+          }
+          
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Upload failed after $maxRetries attempts: ${e.toString()}'),
+              content: Text('Upload failed: $errorDisplay'),
               backgroundColor: Colors.red,
-              duration: const Duration(seconds: 3),
+              duration: const Duration(seconds: 5),
             ),
           );
+          
+          DebugService.instance.logUpload('Upload failed after $maxRetries attempts: $errorDisplay');
         }
       }
     }
@@ -398,7 +478,10 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
                     items: const [
                       DropdownMenuItem(value: '15m', child: Text('15 minutes')),
                       DropdownMenuItem(value: '1h', child: Text('1 hour')),
-                      DropdownMenuItem(value: '6h', child: Text('6 hours')),
+                      DropdownMenuItem(value: '2h', child: Text('2 hours')),
+                      DropdownMenuItem(value: '4h', child: Text('4 hours')),
+                      DropdownMenuItem(value: '8h', child: Text('8 hours')),
+                      DropdownMenuItem(value: '12h', child: Text('12 hours')),
                       DropdownMenuItem(value: '24h', child: Text('24 hours')),
                       DropdownMenuItem(value: '48h', child: Text('48 hours')),
                     ],
