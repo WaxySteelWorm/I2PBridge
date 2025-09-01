@@ -30,6 +30,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   String _currentUrl = '';
   String _currentBaseUrl = '';
   String _lastLoadedUrl = ''; // Track last successfully loaded URL to prevent duplicates
+  String _lastFailedUrl = ''; // Track last failed URL for retry
   bool _encryptionEnabled = true;
   late AnimationController _lockAnimationController;
   late Animation<double> _lockAnimation;
@@ -183,6 +184,103 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
       await _loadPage(_history[_historyIndex], fromHistory: true, forceRefresh: true);
     }
   }
+  
+  Future<void> _displayImage(String imageUrl) async {
+    _log('🖼️ Displaying image: $imageUrl');
+    
+    setState(() {
+      _isLoading = true;
+      _progress = 0.3;
+    });
+    
+    try {
+      // Create HTML page with the image
+      final html = '''
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+        <style>
+          body {
+            margin: 0;
+            padding: 10px;
+            background: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            box-sizing: border-box;
+          }
+          img {
+            max-width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
+          }
+          .container {
+            text-align: center;
+            width: 100%;
+          }
+          .url {
+            color: #888;
+            font-size: 12px;
+            margin-top: 10px;
+            word-break: break-all;
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <img src="\${imageUrl}" alt="Image" onclick="window.open('\${imageUrl}', '_blank')">
+          <div class="url">\${imageUrl}</div>
+        </div>
+      </body>
+      </html>
+      ''';
+      
+      // Get auth token and create proxied URL
+      final authService = Provider.of<AuthService>(context, listen: false);
+      final token = authService.token ?? '';
+      const serverUrl = 'https://bridge.stormycloud.org';
+      final encodedUrl = Uri.encodeComponent(imageUrl);
+      final proxiedImageUrl = '$serverUrl/api/v1/browse?url=$encodedUrl&raw=true&token=$token';
+      
+      final displayHtml = html
+          .replaceAll('\${imageUrl}', proxiedImageUrl);
+      
+      setState(() => _progress = 0.7);
+      
+      if (_webViewController != null) {
+        await _webViewController!.loadData(
+          data: displayHtml,
+          mimeType: "text/html",
+          encoding: "utf8",
+        );
+        
+        _lastLoadedUrl = imageUrl;
+        _urlController.text = imageUrl.replaceFirst(RegExp(r'^https?://'), '');
+      }
+      
+      setState(() => _progress = 1.0);
+      _log('✅ Image page loaded successfully');
+      
+    } catch (e) {
+      _log('❌ Error displaying image: $e');
+      _lastFailedUrl = imageUrl; // Store failed image URL for retry
+      final errorHtml = _createErrorPage('Failed to display image: ${e.toString()}');
+      if (_webViewController != null) {
+        await _webViewController!.loadData(data: errorHtml, mimeType: "text/html");
+      }
+    } finally {
+      await Future.delayed(const Duration(milliseconds: 300));
+      setState(() {
+        _isLoading = false;
+        _progress = 1.0;
+      });
+    }
+  }
 
   void _stop() {
     if (_isLoading) {
@@ -217,6 +315,13 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     // Convert query text into search URL if needed
     String fullUrl = _normalizeInputToUrl(url.trim());
     String cleanUrl = fullUrl.replaceFirst(RegExp(r'^https?://'), '');
+    
+    // Check if this is a direct image URL
+    if (fullUrl.contains(RegExp(r'\.(webp|jpg|jpeg|png|gif|svg|ico|bmp|avif)(\?.*)?$', caseSensitive: false))) {
+      _log('🖼️ Direct image URL detected, displaying as image: $fullUrl');
+      await _displayImage(fullUrl);
+      return;
+    }
     
     // Check if we're already loading this exact URL to prevent duplicate loads
     if (!forceRefresh && _isLoading && (fullUrl == _currentBaseUrl || fullUrl == _lastLoadedUrl)) {
@@ -259,7 +364,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     try {
       setState(() => _progress = 0.3);
       
-      final content = await _fetchFromBridge(fullUrl);
+      final content = await _fetchFromBridge(fullUrl, forceRefresh: forceRefresh);
       
       setState(() => _progress = 0.7);
       
@@ -297,6 +402,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
       _log('Error loading page: $e');
       _log('ERROR in _loadPage: $e');
       _log('Stack trace: ${StackTrace.current}');
+      
+      // Store the failed URL for retry
+      _lastFailedUrl = fullUrl;
       
       final errorHtml = _createErrorPage('Failed to load $cleanUrl: ${e.toString()}');
       if (_webViewController != null) {
@@ -350,7 +458,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     return content;
   }
 
-  Future<String> _fetchFromBridge(String fullUrl) async {
+  Future<String> _fetchFromBridge(String fullUrl, {bool forceRefresh = false}) async {
     const maxRetries = 2;
     
     // Clean up any existing client first
@@ -390,7 +498,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
 
           
           // Server expects 'data' field when encrypted
-          final body = 'data=${Uri.encodeComponent(encryptedUrl)}&encrypted=true';
+          final refreshParam = forceRefresh ? '&refresh=true' : '';
+          final body = 'data=${Uri.encodeComponent(encryptedUrl)}&encrypted=true$refreshParam';
           
           DebugService.instance.logHttp('POST https://bridge.stormycloud.org/api/v1/browse - Encrypted request for: $fullUrl');
           final response = await _currentRequestClient!.post(
@@ -421,7 +530,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             throw Exception('Server returned ${response.statusCode}: ${response.reasonPhrase}');
           }
         } else {
-          final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}');
+          final refreshParam = forceRefresh ? '&refresh=true' : '';
+          final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}$refreshParam');
           final headers = {
             'User-Agent': appUserAgent,
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -513,10 +623,13 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   String _enhanceHtmlForMobile(String html, String baseUrl) {
-    _log('Enhancing HTML for mobile (simple mode)');
+    // Get auth info for image proxying
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final authToken = authService.token;
+    const serverUrl = 'https://bridge.stormycloud.org';
     
     // Fix relative links SAFELY - no complex URI parsing
-    html = _fixLinksSimple(html, baseUrl);
+    html = _fixLinksSimple(html, baseUrl, authToken: authToken, serverUrl: serverUrl);
     
     // Add mobile CSS
     
@@ -704,8 +817,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     return html;
   }
 
-  // Enhanced link fixing to handle more cases
-  String _fixLinksSimple(String html, String baseUrl) {
+  // Enhanced link fixing to handle more cases (now accepts auth token)
+  String _fixLinksSimple(String html, String baseUrl, {String? authToken, String? serverUrl}) {
     final baseUri = _getBaseUrlForPage(baseUrl);
     _log('Fixing links with base URI: ${baseUri?.toString() ?? 'null'}');
     
@@ -752,13 +865,51 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         },
       );
       
-      // Fix src attributes for images too
+      // Fix src attributes for images to go through our proxy
+      // Handle both src="..." and src='...' patterns
       html = html.replaceAllMapped(
-        RegExp(r'src="(/[^"]*)"', caseSensitive: false),
-        (match) => 'src="$scheme://$host$port${match.group(1)}"',
+        RegExp(r'''src\s*=\s*["']([^"']+)["']''', caseSensitive: false),
+        (match) {
+          String imgSrc = match.group(1)!;
+          
+          // Skip data URLs and already proxied URLs
+          if (imgSrc.startsWith('data:') || imgSrc.contains('/api/v1/browse')) {
+            return match.group(0)!;
+          }
+          
+          // Convert relative URLs to absolute
+          String absoluteUrl;
+          if (imgSrc.startsWith('http://') || imgSrc.startsWith('https://')) {
+            absoluteUrl = imgSrc;
+          } else if (imgSrc.startsWith('//')) {
+            absoluteUrl = '$scheme:$imgSrc';
+          } else if (imgSrc.startsWith('/')) {
+            absoluteUrl = '$scheme://$host$port$imgSrc';
+          } else {
+            absoluteUrl = '$scheme://$host$port$currentPath$imgSrc';
+          }
+          
+          // For ALL images (including those without extensions), route through our proxy
+          // This catches dynamically served images too
+          // Check if it's likely an image (by extension or path pattern)
+          bool isLikelyImage = absoluteUrl.contains(RegExp(r'\.(webp|jpg|jpeg|png|gif|svg|ico|bmp|avif)(\?.*)?$', caseSensitive: false)) ||
+                              absoluteUrl.contains('/images/') ||
+                              absoluteUrl.contains('/img/') ||
+                              absoluteUrl.contains('/logo') ||
+                              absoluteUrl.contains('/icon') ||
+                              absoluteUrl.contains('/banner');
+          
+          if (isLikelyImage) {
+            // Always use the proxy, with or without auth token
+            final encodedUrl = Uri.encodeComponent(absoluteUrl);
+            final tokenParam = (authToken != null && authToken.isNotEmpty) ? '&token=$authToken' : '';
+            final proxyUrl = '${serverUrl ?? "https://bridge.stormycloud.org"}/api/v1/browse?url=$encodedUrl&raw=true$tokenParam';
+            return 'src="$proxyUrl"';
+          }
+          
+          return 'src="$absoluteUrl"';
+        },
       );
-      
-      _log('✅ Fixed relative links for: $scheme://$host$port');
       
     } catch (e) {
       _log('⚠️ Error parsing baseUrl for link fixing: $e, falling back to simple method');
@@ -867,7 +1018,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         <h2>$title</h2>
         <p>$message</p>
         ${isServiceDisabled ? '<div class="info-message">This service has been temporarily disabled by the administrator. Please try again later.</div>' : ''}
-        <button class="retry-button" onclick="location.reload()">Retry</button>
+        <button class="retry-button" onclick="window.flutter_inappwebview.callHandler('retryPage')">Retry</button>
         <div class="debug-info">Debug Info:\nCurrent URL: $_currentUrl\nBase URL: $_currentBaseUrl\nEncryption: Always Enabled</div>
       </div>
     </body>
@@ -994,6 +1145,28 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
               _loadPage(url);
             } else {
               _log('❌ JavaScript handler called with no arguments');
+            }
+          },
+        );
+        
+        // Add JavaScript handler for retry button
+        controller.addJavaScriptHandler(
+          handlerName: 'retryPage',
+          callback: (args) {
+            _log('🔄 Retry button clicked');
+            
+            // If we have a last failed URL, try to load it again
+            if (_lastFailedUrl.isNotEmpty) {
+              _log('🔄 Retrying failed URL: $_lastFailedUrl');
+              _loadPage(_lastFailedUrl, forceRefresh: true);
+            } else if (_currentUrl.isNotEmpty) {
+              // Fall back to current URL
+              _log('🔄 Retrying current URL: $_currentUrl');
+              _loadPage(_currentUrl, forceRefresh: true);
+            } else if (_history.isNotEmpty) {
+              // Fall back to last history item
+              _log('🔄 Retrying last history item');
+              _refresh();
             }
           },
         );
