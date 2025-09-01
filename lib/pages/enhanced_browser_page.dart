@@ -208,9 +208,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   Future<void> _loadPage(String url, {bool fromHistory = false, bool forceRefresh = false}) async {
+    print('🚀 DEBUG: _loadPage CALLED with: $url');
     _log('🌍 _loadPage CALLED with: $url (fromHistory: $fromHistory, forceRefresh: $forceRefresh)');
     
     if (url.trim().isEmpty) {
+      print('❌ DEBUG: Empty URL provided');
       _log('❌ _loadPage: Empty URL provided, returning');
       return;
     }
@@ -219,18 +221,23 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     String fullUrl = _normalizeInputToUrl(url.trim());
     String cleanUrl = fullUrl.replaceFirst(RegExp(r'^https?://'), '');
     
+    print('🌐 DEBUG: Processed URLs - Full: $fullUrl, Clean: $cleanUrl');
+    
     // Check if we're already loading this exact URL to prevent duplicate loads
     if (!forceRefresh && _isLoading && (fullUrl == _currentBaseUrl || fullUrl == _lastLoadedUrl)) {
+      print('⏭️ DEBUG: Skipping duplicate load');
       _log('⏭️ Already loading or loaded this URL, skipping duplicate load');
       return;
     }
     
     // Check if this is the same URL we just loaded (prevent infinite loops)
     if (!forceRefresh && fullUrl == _lastLoadedUrl && !_isLoading) {
+      print('⏭️ DEBUG: Skipping recently loaded URL');
       _log('⏭️ This URL was just loaded successfully, skipping duplicate');
       return;
     }
     
+    print('🌍 DEBUG: Starting page load for: $fullUrl');
     _log('🌍 _loadPage START: $fullUrl');
     _log('   - Original input: $url');
     _log('   - From history: $fromHistory');
@@ -268,13 +275,16 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         throw Exception('Empty response from server');
       }
       
+      print('🔧 DEBUG: About to enhance HTML (${content.length} chars)');
       final enhancedHtml = _enhanceHtmlForMobile(content, fullUrl);
+      print('📄 DEBUG: HTML enhanced (${enhancedHtml.length} chars)');
       
       setState(() => _progress = 0.9);
       
       if (_webViewController != null) {
         // Set proper baseUrl so relative links work correctly
         final baseUrl = _getBaseUrlForPage(fullUrl);
+        print('🌐 DEBUG: Loading data with baseUrl: $baseUrl');
         _log('Loading data with baseUrl: $baseUrl');
         
         await _webViewController!.loadData(
@@ -289,6 +299,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         
         // Update the URL in the address bar
         _urlController.text = cleanUrl;
+        
+        print('✅ DEBUG: WebView data loaded successfully');
       }
       
       setState(() => _progress = 1.0);
@@ -542,15 +554,22 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   String _enhanceHtmlForMobile(String html, String baseUrl) {
-    _log('Enhancing HTML for mobile (simple mode)');
+    _log('🔧 Enhancing HTML for mobile (simple mode)');
+    _log('📄 HTML length: ${html.length} chars');
+    _log('🌐 Base URL: $baseUrl');
+    
+    // Count images in HTML for debugging
+    final imgMatches = RegExp(r'<img[^>]*>', caseSensitive: false).allMatches(html);
+    _log('🖼️ Found ${imgMatches.length} image tags in HTML');
     
     // Get auth token for image proxying
     String authToken = '';
     try {
       final authService = Provider.of<AuthService>(context, listen: false);
       authToken = authService.token ?? '';
+      _log('🔑 Auth token available: ${authToken.isNotEmpty}');
     } catch (e) {
-      _log('Failed to get auth token for images: $e');
+      _log('❌ Failed to get auth token for images: $e');
     }
     
     // Fix relative links SAFELY - no complex URI parsing
@@ -747,8 +766,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
 
   // Enhanced link fixing to handle more cases
   String _fixLinksSimple(String html, String baseUrl, {String authToken = ''}) {
+    _log('🔗 Starting _fixLinksSimple for: $baseUrl');
     final baseUri = _getBaseUrlForPage(baseUrl);
-    _log('Fixing links with base URI: ${baseUri?.toString() ?? 'null'}');
+    _log('🔗 Base URI: ${baseUri?.toString() ?? 'null'}');
     
     try {
       final uri = Uri.parse(baseUrl);
@@ -793,6 +813,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         },
       );
       
+      // Count images before processing
+      final imagesBefore = RegExp(r'<img[^>]*src="([^"]*)"[^>]*>', caseSensitive: false).allMatches(html).length;
+      _log('🖼️ Processing $imagesBefore images with double quotes');
+      
       // Fix src attributes for images - proxy through bridge server for WebP support
       html = html.replaceAllMapped(
         RegExp(r'<img([^>]*)src="([^"]*)"([^>]*)>', caseSensitive: false),
@@ -801,8 +825,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           final src = match.group(2)!;
           final afterSrc = match.group(3)!;
           
+          _log('🖼️ Processing image src: $src');
+          
           // Skip if already a proxy URL or data URL
           if (src.contains('bridge.stormycloud.org') || src.startsWith('data:')) {
+            _log('🖼️ Skipping already proxied/data URL: $src');
             return match.group(0)!;
           }
           
@@ -821,7 +848,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
             : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
           
-          _log('🖼️ Proxying image: $src -> $proxyUrl');
+          _log('🖼️ ✅ PROXYING IMAGE: $src -> BRIDGE SERVER');
+          DebugService.instance.logBrowser('Image proxy: $src -> bridge');
           
           // Replace src with proxy URL
           return '<img${beforeSrc}src="$proxyUrl"$afterSrc>';
