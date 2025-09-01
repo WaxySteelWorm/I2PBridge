@@ -1,0 +1,42 @@
+{
+  "name": "i2p-bridge-stress-test",
+  "version": "1.0.0",
+  "description": "Stress testing suite for I2P Bridge application",
+  "main": "test-orchestrator.js",
+  "scripts": {
+    "install": "npm install",
+    "test:light": "node test-orchestrator.js --users=10 --duration=60",
+    "test:medium": "node test-orchestrator.js --users=50 --duration=120",
+    "test:heavy": "node test-orchestrator.js --users=100 --duration=180",
+    "test:extreme": "node test-orchestrator.js --users=200 --duration=300",
+    "test:http": "node http-stress-test.js --users=20 --duration=60",
+    "test:irc": "node irc-stress-test.js --users=10 --duration=120",
+    "test:upload": "node upload-stress-test.js --users=5 --duration=60",
+    "monitor": "node monitoring-dashboard.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "axios": "^1.6.0",
+    "form-data": "^4.0.0",
+    "crypto": "^1.0.1",
+    "yargs": "^17.7.2",
+    "cli-table3": "^0.6.3",
+    "colors": "^1.4.0",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.5",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0"
+  },
+  "keywords": [
+    "stress-testing",
+    "load-testing", 
+    "i2p",
+    "bridge",
+    "performance"
+  ],
+  "author": "I2P Bridge Team",
+  "license": "MIT"
+}

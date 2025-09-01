@@ -1,5 +1,6 @@
 // lib/pages/enhanced_browser_page.dart
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
@@ -47,6 +48,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   @override
   void initState() {
     super.initState();
+    print('🧪 WEBP DEBUG: EnhancedBrowserPage initState called');
     _encryption.initialize();
     
     // Initialize animation controller
@@ -207,9 +209,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   Future<void> _loadPage(String url, {bool fromHistory = false, bool forceRefresh = false}) async {
+    print('🚀 DEBUG: _loadPage CALLED with: $url');
     _log('🌍 _loadPage CALLED with: $url (fromHistory: $fromHistory, forceRefresh: $forceRefresh)');
     
     if (url.trim().isEmpty) {
+      print('❌ DEBUG: Empty URL provided');
       _log('❌ _loadPage: Empty URL provided, returning');
       return;
     }
@@ -218,18 +222,23 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
     String fullUrl = _normalizeInputToUrl(url.trim());
     String cleanUrl = fullUrl.replaceFirst(RegExp(r'^https?://'), '');
     
+    print('🌐 DEBUG: Processed URLs - Full: $fullUrl, Clean: $cleanUrl');
+    
     // Check if we're already loading this exact URL to prevent duplicate loads
     if (!forceRefresh && _isLoading && (fullUrl == _currentBaseUrl || fullUrl == _lastLoadedUrl)) {
+      print('⏭️ DEBUG: Skipping duplicate load');
       _log('⏭️ Already loading or loaded this URL, skipping duplicate load');
       return;
     }
     
     // Check if this is the same URL we just loaded (prevent infinite loops)
     if (!forceRefresh && fullUrl == _lastLoadedUrl && !_isLoading) {
+      print('⏭️ DEBUG: Skipping recently loaded URL');
       _log('⏭️ This URL was just loaded successfully, skipping duplicate');
       return;
     }
     
+    print('🌍 DEBUG: Starting page load for: $fullUrl');
     _log('🌍 _loadPage START: $fullUrl');
     _log('   - Original input: $url');
     _log('   - From history: $fromHistory');
@@ -267,13 +276,16 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         throw Exception('Empty response from server');
       }
       
+      print('🔧 DEBUG: About to enhance HTML (${content.length} chars)');
       final enhancedHtml = _enhanceHtmlForMobile(content, fullUrl);
+      print('📄 DEBUG: HTML enhanced (${enhancedHtml.length} chars)');
       
       setState(() => _progress = 0.9);
       
       if (_webViewController != null) {
         // Set proper baseUrl so relative links work correctly
         final baseUrl = _getBaseUrlForPage(fullUrl);
+        print('🌐 DEBUG: Loading data with baseUrl: $baseUrl');
         _log('Loading data with baseUrl: $baseUrl');
         
         await _webViewController!.loadData(
@@ -288,6 +300,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         
         // Update the URL in the address bar
         _urlController.text = cleanUrl;
+        
+        print('✅ DEBUG: WebView data loaded successfully');
       }
       
       setState(() => _progress = 1.0);
@@ -337,9 +351,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   void _performSearch(String query) {
+    print('🧪 WEBP DEBUG: Search performed: $query');
     final q = query.trim();
     if (q.isEmpty) return;
     final url = 'http://shinobi.i2p/search?query=${Uri.encodeQueryComponent(q)}';
+    print('🧪 WEBP DEBUG: Search URL generated: $url');
     _loadPage(url);
   }
 
@@ -376,7 +392,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             'X-Session-Token': sessionToken,
             'X-Privacy-Mode': 'enabled',
             'User-Agent': appUserAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/avif,image/*,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
@@ -407,6 +423,30 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
               throw Exception('Empty response from server');
             }
             
+            // Check if this is binary image data (WebP, PNG, JPEG, etc.)
+            final contentType = response.headers['content-type'] ?? '';
+            final urlLower = fullUrl.toLowerCase();
+            final isImageByType = contentType.startsWith('image/');
+            final isImageByUrl = urlLower.contains('.webp') || 
+                                urlLower.contains('.png') || 
+                                urlLower.contains('.jpg') || 
+                                urlLower.contains('.jpeg') || 
+                                urlLower.contains('.gif') ||
+                                urlLower.contains('&raw=true');
+            final isImageResponse = isImageByType || isImageByUrl;
+            
+            _log('🔍 Image detection: URL=$fullUrl, ContentType=$contentType, IsImage=$isImageResponse (byType=$isImageByType, byUrl=$isImageByUrl)');
+            
+            if (isImageResponse) {
+              // For images, return as base64 data URL to preserve binary data
+              final bytes = response.bodyBytes;
+              final mimeType = contentType.isNotEmpty ? contentType : 'image/webp';
+              final base64Data = base64Encode(bytes);
+              _log('🖼️ ✅ Converting WebP/image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              DebugService.instance.logBrowser('Image converted: ${fullUrl.split('/').last} -> data URL (${bytes.length} bytes)');
+              return _cleanupAndReturn('data:$mimeType;base64,$base64Data');
+            }
+            
             try {
               final jsonResponse = jsonDecode(response.body);
               final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
@@ -424,7 +464,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}');
           final headers = {
             'User-Agent': appUserAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/avif,image/*,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
@@ -445,6 +485,30 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           if (response.statusCode == 200) {
             if (response.body.trim().isEmpty) {
               throw Exception('Empty response from server');
+            }
+            
+            // Check if this is binary image data (WebP, PNG, JPEG, etc.)
+            final contentType = response.headers['content-type'] ?? '';
+            final urlLower = fullUrl.toLowerCase();
+            final isImageByType = contentType.startsWith('image/');
+            final isImageByUrl = urlLower.contains('.webp') || 
+                                urlLower.contains('.png') || 
+                                urlLower.contains('.jpg') || 
+                                urlLower.contains('.jpeg') || 
+                                urlLower.contains('.gif') ||
+                                urlLower.contains('&raw=true');
+            final isImageResponse = isImageByType || isImageByUrl;
+            
+            _log('🔍 Image detection: URL=$fullUrl, ContentType=$contentType, IsImage=$isImageResponse (byType=$isImageByType, byUrl=$isImageByUrl)');
+            
+            if (isImageResponse) {
+              // For images, return as base64 data URL to preserve binary data
+              final bytes = response.bodyBytes;
+              final mimeType = contentType.isNotEmpty ? contentType : 'image/webp';
+              final base64Data = base64Encode(bytes);
+              _log('🖼️ ✅ Converting WebP/image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              DebugService.instance.logBrowser('Image converted: ${fullUrl.split('/').last} -> data URL (${bytes.length} bytes)');
+              return _cleanupAndReturn('data:$mimeType;base64,$base64Data');
             }
             
             try {
@@ -513,10 +577,26 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   String _enhanceHtmlForMobile(String html, String baseUrl) {
-    _log('Enhancing HTML for mobile (simple mode)');
+    _log('🔧 Enhancing HTML for mobile (simple mode)');
+    _log('📄 HTML length: ${html.length} chars');
+    _log('🌐 Base URL: $baseUrl');
+    
+    // Count images in HTML for debugging
+    final imgMatches = RegExp(r'<img[^>]*>', caseSensitive: false).allMatches(html);
+    _log('🖼️ Found ${imgMatches.length} image tags in HTML');
+    
+    // Get auth token for image proxying
+    String authToken = '';
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      authToken = authService.token ?? '';
+      _log('🔑 Auth token available: ${authToken.isNotEmpty}');
+    } catch (e) {
+      _log('❌ Failed to get auth token for images: $e');
+    }
     
     // Fix relative links SAFELY - no complex URI parsing
-    html = _fixLinksSimple(html, baseUrl);
+    html = _fixLinksSimple(html, baseUrl, authToken: authToken);
     
     // Add mobile CSS
     
@@ -546,6 +626,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         background: #2a2a2a;
         border: 1px solid #444;
+        /* Enhanced WebP support */
+        image-rendering: auto;
+        image-rendering: -webkit-optimize-contrast;
       }
       a { 
         color: #4A9EFF !important; 
@@ -705,9 +788,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   // Enhanced link fixing to handle more cases
-  String _fixLinksSimple(String html, String baseUrl) {
+  String _fixLinksSimple(String html, String baseUrl, {String authToken = ''}) {
+    _log('🔗 Starting _fixLinksSimple for: $baseUrl');
     final baseUri = _getBaseUrlForPage(baseUrl);
-    _log('Fixing links with base URI: ${baseUri?.toString() ?? 'null'}');
+    _log('🔗 Base URI: ${baseUri?.toString() ?? 'null'}');
     
     try {
       final uri = Uri.parse(baseUrl);
@@ -752,11 +836,54 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         },
       );
       
-      // Fix src attributes for images too
-      html = html.replaceAllMapped(
-        RegExp(r'src="(/[^"]*)"', caseSensitive: false),
-        (match) => 'src="$scheme://$host$port${match.group(1)}"',
-      );
+      // Count images before processing
+      final imagesBefore = RegExp(r'<img[^>]*src="([^"]*)"[^>]*>', caseSensitive: false).allMatches(html).length;
+      _log('🖼️ Processing $imagesBefore images with double quotes');
+      
+      // Simple image src fixing first
+      _log('🖼️ Starting simple image processing...');
+      
+      // Fix basic image src attributes
+      html = html.replaceAll('src="/', 'src="$scheme://$host$port/');
+      
+      // Also fix single quotes
+      html = html.replaceAll("src='/", "src='$scheme://$host$port/");
+      
+      // NOW PROXY ALL IMAGES THROUGH BRIDGE SERVER FOR WEBP SUPPORT
+      print('🖼️ WEBP DEBUG: Adding image proxy for WebP support...');
+      _log('🖼️ Adding image proxy for WebP support...');
+      
+      // Find and proxy all image tags
+      final imageRegex = RegExp(r'<img[^>]*src="([^"]*)"[^>]*>', caseSensitive: false);
+      final imageMatches = imageRegex.allMatches(html).toList();
+      
+      print('🖼️ WEBP DEBUG: Found ${imageMatches.length} images to process');
+      _log('🖼️ Found ${imageMatches.length} images to process');
+      
+      for (final match in imageMatches.reversed) {
+        final fullImageTag = match.group(0)!;
+        final imageSrc = match.group(1)!;
+        
+        print('🖼️ WEBP DEBUG: Processing image: $imageSrc');
+        _log('🖼️ Processing image: $imageSrc');
+        
+        // Skip if already proxied
+        if (imageSrc.contains('bridge.stormycloud.org') || imageSrc.startsWith('data:')) {
+          continue;
+        }
+        
+        // Create proxy URL for WebP support
+        final encodedUrl = Uri.encodeComponent(imageSrc);
+        final proxyUrl = authToken.isNotEmpty
+            ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
+            : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
+        
+        final newImageTag = fullImageTag.replaceFirst('src="$imageSrc"', 'src="$proxyUrl"');
+        html = html.replaceFirst(fullImageTag, newImageTag);
+        
+        print('🖼️ WEBP DEBUG: ✅ PROXIED IMAGE: $imageSrc -> BRIDGE');
+        _log('🖼️ ✅ PROXIED IMAGE: $imageSrc -> BRIDGE');
+      }
       
       _log('✅ Fixed relative links for: $scheme://$host$port');
       
@@ -778,6 +905,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         RegExp(r"href='(/[^']*)'", caseSensitive: false),
         (match) => "href='http://$domain${match.group(1)}'",
       );
+      
+      // Also fix image URLs in fallback mode (simplified)
+      html = html.replaceAll('src="/', 'src="http://$domain/');
     }
     
     return html;
@@ -877,6 +1007,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
 
   @override
   Widget build(BuildContext context) {
+    print('🧪 WEBP DEBUG: EnhancedBrowserPage build() called');
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
@@ -917,7 +1048,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                           tooltip: _isLoading ? 'Stop' : 'Refresh',
                         ),
                       ],
-                      onSubmitted: (value) => _loadPage(value),
+                      onSubmitted: (value) {
+                        print('🧪 WEBP DEBUG: URL submitted: $value');
+                        _loadPage(value);
+                      },
                       controller: _urlController,
                     ),
                     const SizedBox(height: 8),
@@ -969,6 +1103,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         transparentBackground: true,
         supportZoom: true,
         cacheEnabled: true, // Enable caching to reduce redundant requests
+        // Enhanced image support including WebP
+        loadsImagesAutomatically: true,
+        blockNetworkImage: false,
+        mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
         // iOS specific settings
         allowsInlineMediaPlayback: true,
         allowsBackForwardNavigationGestures: true,
@@ -1438,7 +1576,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                     child: SearchBar(
                       hintText: 'Search shinobi.i2p',
                       leading: const Icon(Icons.search),
-                      onSubmitted: _performSearch,
+                      onSubmitted: (query) {
+                        print('🧪 WEBP DEBUG: Landing page search: $query');
+                        _performSearch(query);
+                      },
                       controller: _searchController,
                     ),
                   ),
@@ -1474,7 +1615,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                             SizedBox(
                               width: itemWidth,
                               child: InkWell(
-                                onTap: () => _loadPage(site.url),
+                                onTap: () {
+                                print('🧪 WEBP DEBUG: Popular site clicked: ${site.url}');
+                                _loadPage(site.url);
+                              },
                                 borderRadius: BorderRadius.circular(10),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
