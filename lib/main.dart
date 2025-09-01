@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/irc_service.dart';
 import 'services/pop3_mail_service.dart';  // Add this import
 import 'services/debug_service.dart';
@@ -76,6 +77,91 @@ class _MainScaffoldState extends State<MainScaffold> {
         });
       }
     });
+    
+    // Show I2P info dialog if needed
+    _checkAndShowI2PInfoDialog();
+  }
+  
+  Future<void> _checkAndShowI2PInfoDialog() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hideDialog = prefs.getBool('hideI2PWarning') ?? false;
+    
+    if (!hideDialog && mounted) {
+      // Small delay to ensure the main UI is rendered first
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) {
+        _showI2PInfoDialog();
+      }
+    }
+  }
+  
+  void _showI2PInfoDialog() {
+    bool dontShowAgain = false;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.blue),
+                  SizedBox(width: 8),
+                  Text('Welcome to I2P Bridge'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '• The I2P network can be slow and unstable at times\n'
+                    '• Connections may take 30-60 seconds to establish\n'
+                    '• If your attempt fails, please try again',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Checkbox(
+                        value: dontShowAgain,
+                        onChanged: (value) {
+                          setState(() {
+                            dontShowAgain = value ?? false;
+                          });
+                        },
+                      ),
+                      const Expanded(
+                        child: Text(
+                          "Don't show this again",
+                          style: TextStyle(fontSize: 14),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    if (dontShowAgain) {
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.setBool('hideI2PWarning', true);
+                    }
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  },
+                  child: const Text('OK, I Understand'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   static const List<String> _moduleTitles = <String>[
