@@ -351,9 +351,11 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   void _performSearch(String query) {
+    print('🧪 WEBP DEBUG: Search performed: $query');
     final q = query.trim();
     if (q.isEmpty) return;
     final url = 'http://shinobi.i2p/search?query=${Uri.encodeQueryComponent(q)}';
+    print('🧪 WEBP DEBUG: Search URL generated: $url');
     _loadPage(url);
   }
 
@@ -1026,7 +1028,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                           tooltip: _isLoading ? 'Stop' : 'Refresh',
                         ),
                       ],
-                      onSubmitted: (value) => _loadPage(value),
+                      onSubmitted: (value) {
+                        print('🧪 WEBP DEBUG: URL submitted: $value');
+                        _loadPage(value);
+                      },
                       controller: _urlController,
                     ),
                     const SizedBox(height: 8),
@@ -1551,7 +1556,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                     child: SearchBar(
                       hintText: 'Search shinobi.i2p',
                       leading: const Icon(Icons.search),
-                      onSubmitted: _performSearch,
+                      onSubmitted: (query) {
+                        print('🧪 WEBP DEBUG: Landing page search: $query');
+                        _performSearch(query);
+                      },
                       controller: _searchController,
                     ),
                   ),
@@ -1587,7 +1595,10 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
                             SizedBox(
                               width: itemWidth,
                               child: InkWell(
-                                onTap: () => _loadPage(site.url),
+                                onTap: () {
+                                print('🧪 WEBP DEBUG: Popular site clicked: ${site.url}');
+                                _loadPage(site.url);
+                              },
                                 borderRadius: BorderRadius.circular(10),
                                 child: Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),

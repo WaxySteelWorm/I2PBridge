@@ -22,6 +22,9 @@ void main(List<String> args) {
   
   // Always show app startup message
   DebugService.instance.forceLog('🚀 I2P Bridge starting...');
+  
+  // WEBP DEBUG: Test if this shows up
+  print('🧪 WEBP DEBUG TEST: main() called - checking if logs work');
   runApp(
     MultiProvider(  // Changed from ChangeNotifierProvider to MultiProvider
       providers: [
