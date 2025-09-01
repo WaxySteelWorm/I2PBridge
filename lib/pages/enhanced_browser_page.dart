@@ -1,5 +1,6 @@
 // lib/pages/enhanced_browser_page.dart
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:http/http.dart' as http;
@@ -376,7 +377,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             'X-Session-Token': sessionToken,
             'X-Privacy-Mode': 'enabled',
             'User-Agent': appUserAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/avif,image/*,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
@@ -407,6 +408,24 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
               throw Exception('Empty response from server');
             }
             
+            // Check if this is binary image data (WebP, PNG, JPEG, etc.)
+            final contentType = response.headers['content-type'] ?? '';
+            final isImageResponse = contentType.startsWith('image/') || 
+                                  fullUrl.toLowerCase().contains('.webp') || 
+                                  fullUrl.toLowerCase().contains('.png') || 
+                                  fullUrl.toLowerCase().contains('.jpg') || 
+                                  fullUrl.toLowerCase().contains('.jpeg') || 
+                                  fullUrl.toLowerCase().contains('.gif');
+            
+            if (isImageResponse) {
+              // For images, return as base64 data URL to preserve binary data
+              final bytes = response.bodyBytes;
+              final mimeType = contentType.isNotEmpty ? contentType : 'image/webp';
+              final base64Data = base64Encode(bytes);
+              _log('🖼️ Converting image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              return _cleanupAndReturn('data:$mimeType;base64,$base64Data');
+            }
+            
             try {
               final jsonResponse = jsonDecode(response.body);
               final content = jsonResponse['content'] ?? jsonResponse['data'] ?? response.body;
@@ -424,7 +443,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           final Uri browseUrl = Uri.parse('https://bridge.stormycloud.org/api/v1/browse?url=${Uri.encodeComponent(fullUrl)}');
           final headers = {
             'User-Agent': appUserAgent,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/avif,image/*,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
             'Accept-Encoding': 'gzip, deflate',
             'Connection': 'keep-alive',
@@ -445,6 +464,24 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
           if (response.statusCode == 200) {
             if (response.body.trim().isEmpty) {
               throw Exception('Empty response from server');
+            }
+            
+            // Check if this is binary image data (WebP, PNG, JPEG, etc.)
+            final contentType = response.headers['content-type'] ?? '';
+            final isImageResponse = contentType.startsWith('image/') || 
+                                  fullUrl.toLowerCase().contains('.webp') || 
+                                  fullUrl.toLowerCase().contains('.png') || 
+                                  fullUrl.toLowerCase().contains('.jpg') || 
+                                  fullUrl.toLowerCase().contains('.jpeg') || 
+                                  fullUrl.toLowerCase().contains('.gif');
+            
+            if (isImageResponse) {
+              // For images, return as base64 data URL to preserve binary data
+              final bytes = response.bodyBytes;
+              final mimeType = contentType.isNotEmpty ? contentType : 'image/webp';
+              final base64Data = base64Encode(bytes);
+              _log('🖼️ Converting image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              return _cleanupAndReturn('data:$mimeType;base64,$base64Data');
             }
             
             try {
@@ -526,6 +563,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         background: #2a2a2a;
         border: 1px solid #444;
+        /* Enhanced WebP support */
+        image-rendering: auto;
+        image-rendering: -webkit-optimize-contrast;
       }
       a { 
         color: #4A9EFF !important; 
@@ -949,6 +989,9 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         transparentBackground: true,
         supportZoom: true,
         cacheEnabled: true, // Enable caching to reduce redundant requests
+        // Enhanced image support including WebP
+        loadsImagesAutomatically: true,
+        blockNetworkImage: false,
         // iOS specific settings
         allowsInlineMediaPlayback: true,
         allowsBackForwardNavigationGestures: true,
