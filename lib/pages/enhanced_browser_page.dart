@@ -410,19 +410,25 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             
             // Check if this is binary image data (WebP, PNG, JPEG, etc.)
             final contentType = response.headers['content-type'] ?? '';
-            final isImageResponse = contentType.startsWith('image/') || 
-                                  fullUrl.toLowerCase().contains('.webp') || 
-                                  fullUrl.toLowerCase().contains('.png') || 
-                                  fullUrl.toLowerCase().contains('.jpg') || 
-                                  fullUrl.toLowerCase().contains('.jpeg') || 
-                                  fullUrl.toLowerCase().contains('.gif');
+            final urlLower = fullUrl.toLowerCase();
+            final isImageByType = contentType.startsWith('image/');
+            final isImageByUrl = urlLower.contains('.webp') || 
+                                urlLower.contains('.png') || 
+                                urlLower.contains('.jpg') || 
+                                urlLower.contains('.jpeg') || 
+                                urlLower.contains('.gif') ||
+                                urlLower.contains('&raw=true');
+            final isImageResponse = isImageByType || isImageByUrl;
+            
+            _log('🔍 Image detection: URL=$fullUrl, ContentType=$contentType, IsImage=$isImageResponse (byType=$isImageByType, byUrl=$isImageByUrl)');
             
             if (isImageResponse) {
               // For images, return as base64 data URL to preserve binary data
               final bytes = response.bodyBytes;
               final mimeType = contentType.isNotEmpty ? contentType : 'image/webp';
               final base64Data = base64Encode(bytes);
-              _log('🖼️ Converting image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              _log('🖼️ ✅ Converting WebP/image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              DebugService.instance.logBrowser('Image converted: ${fullUrl.split('/').last} -> data URL (${bytes.length} bytes)');
               return _cleanupAndReturn('data:$mimeType;base64,$base64Data');
             }
             
@@ -468,19 +474,25 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
             
             // Check if this is binary image data (WebP, PNG, JPEG, etc.)
             final contentType = response.headers['content-type'] ?? '';
-            final isImageResponse = contentType.startsWith('image/') || 
-                                  fullUrl.toLowerCase().contains('.webp') || 
-                                  fullUrl.toLowerCase().contains('.png') || 
-                                  fullUrl.toLowerCase().contains('.jpg') || 
-                                  fullUrl.toLowerCase().contains('.jpeg') || 
-                                  fullUrl.toLowerCase().contains('.gif');
+            final urlLower = fullUrl.toLowerCase();
+            final isImageByType = contentType.startsWith('image/');
+            final isImageByUrl = urlLower.contains('.webp') || 
+                                urlLower.contains('.png') || 
+                                urlLower.contains('.jpg') || 
+                                urlLower.contains('.jpeg') || 
+                                urlLower.contains('.gif') ||
+                                urlLower.contains('&raw=true');
+            final isImageResponse = isImageByType || isImageByUrl;
+            
+            _log('🔍 Image detection: URL=$fullUrl, ContentType=$contentType, IsImage=$isImageResponse (byType=$isImageByType, byUrl=$isImageByUrl)');
             
             if (isImageResponse) {
               // For images, return as base64 data URL to preserve binary data
               final bytes = response.bodyBytes;
               final mimeType = contentType.isNotEmpty ? contentType : 'image/webp';
               final base64Data = base64Encode(bytes);
-              _log('🖼️ Converting image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              _log('🖼️ ✅ Converting WebP/image to data URL: ${fullUrl.split('/').last} (${bytes.length} bytes, $mimeType)');
+              DebugService.instance.logBrowser('Image converted: ${fullUrl.split('/').last} -> data URL (${bytes.length} bytes)');
               return _cleanupAndReturn('data:$mimeType;base64,$base64Data');
             }
             
@@ -532,8 +544,17 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   String _enhanceHtmlForMobile(String html, String baseUrl) {
     _log('Enhancing HTML for mobile (simple mode)');
     
+    // Get auth token for image proxying
+    String authToken = '';
+    try {
+      final authService = Provider.of<AuthService>(context, listen: false);
+      authToken = authService.token ?? '';
+    } catch (e) {
+      _log('Failed to get auth token for images: $e');
+    }
+    
     // Fix relative links SAFELY - no complex URI parsing
-    html = _fixLinksSimple(html, baseUrl);
+    html = _fixLinksSimple(html, baseUrl, authToken: authToken);
     
     // Add mobile CSS
     
@@ -725,7 +746,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   }
 
   // Enhanced link fixing to handle more cases
-  String _fixLinksSimple(String html, String baseUrl) {
+  String _fixLinksSimple(String html, String baseUrl, {String authToken = ''}) {
     final baseUri = _getBaseUrlForPage(baseUrl);
     _log('Fixing links with base URI: ${baseUri?.toString() ?? 'null'}');
     
@@ -772,10 +793,74 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         },
       );
       
-      // Fix src attributes for images too
+      // Fix src attributes for images - proxy through bridge server for WebP support
       html = html.replaceAllMapped(
-        RegExp(r'src="(/[^"]*)"', caseSensitive: false),
-        (match) => 'src="$scheme://$host$port${match.group(1)}"',
+        RegExp(r'<img([^>]*)src="([^"]*)"([^>]*)>', caseSensitive: false),
+        (match) {
+          final beforeSrc = match.group(1)!;
+          final src = match.group(2)!;
+          final afterSrc = match.group(3)!;
+          
+          // Skip if already a proxy URL or data URL
+          if (src.contains('bridge.stormycloud.org') || src.startsWith('data:')) {
+            return match.group(0)!;
+          }
+          
+          // Build full URL if relative
+          String fullUrl = src;
+          if (src.startsWith('/')) {
+            fullUrl = '$scheme://$host$port$src';
+          } else if (!src.startsWith('http')) {
+            // Relative to current path
+            fullUrl = '$scheme://$host$port$currentPath$src';
+          }
+          
+          // Create proxy URL through bridge server for proper WebP handling
+          final encodedUrl = Uri.encodeComponent(fullUrl);
+          final proxyUrl = authToken.isNotEmpty 
+            ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
+            : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
+          
+          _log('🖼️ Proxying image: $src -> $proxyUrl');
+          
+          // Replace src with proxy URL
+          return '<img${beforeSrc}src="$proxyUrl"$afterSrc>';
+        },
+      );
+      
+      // Also handle single quotes
+      html = html.replaceAllMapped(
+        RegExp(r"<img([^>]*)src='([^']*)'([^>]*)>", caseSensitive: false),
+        (match) {
+          final beforeSrc = match.group(1)!;
+          final src = match.group(2)!;
+          final afterSrc = match.group(3)!;
+          
+          // Skip if already a proxy URL or data URL
+          if (src.contains('bridge.stormycloud.org') || src.startsWith('data:')) {
+            return match.group(0)!;
+          }
+          
+          // Build full URL if relative
+          String fullUrl = src;
+          if (src.startsWith('/')) {
+            fullUrl = '$scheme://$host$port$src';
+          } else if (!src.startsWith('http')) {
+            // Relative to current path
+            fullUrl = '$scheme://$host$port$currentPath$src';
+          }
+          
+          // Create proxy URL through bridge server for proper WebP handling
+          final encodedUrl = Uri.encodeComponent(fullUrl);
+          final proxyUrl = authToken.isNotEmpty 
+            ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
+            : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
+          
+          _log('🖼️ Proxying image: $src -> $proxyUrl');
+          
+          // Replace src with proxy URL
+          return "<img${beforeSrc}src='$proxyUrl'$afterSrc>";
+        },
       );
       
       _log('✅ Fixed relative links for: $scheme://$host$port');
@@ -797,6 +882,26 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
       html = html.replaceAllMapped(
         RegExp(r"href='(/[^']*)'", caseSensitive: false),
         (match) => "href='http://$domain${match.group(1)}'",
+      );
+      
+      // Also fix image URLs in fallback mode
+      html = html.replaceAllMapped(
+        RegExp(r'<img([^>]*)src="(/[^"]*)"([^>]*)>', caseSensitive: false),
+        (match) {
+          final beforeSrc = match.group(1)!;
+          final src = match.group(2)!;
+          final afterSrc = match.group(3)!;
+          
+          final fullUrl = 'http://$domain$src';
+          final encodedUrl = Uri.encodeComponent(fullUrl);
+          final proxyUrl = authToken.isNotEmpty 
+            ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
+            : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
+          
+          _log('🖼️ Fallback proxying image: $src -> $proxyUrl');
+          
+          return '<img${beforeSrc}src="$proxyUrl"$afterSrc>';
+        },
       );
     }
     
@@ -992,6 +1097,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         // Enhanced image support including WebP
         loadsImagesAutomatically: true,
         blockNetworkImage: false,
+        mixedContentMode: MixedContentMode.MIXED_CONTENT_ALWAYS_ALLOW,
         // iOS specific settings
         allowsInlineMediaPlayback: true,
         allowsBackForwardNavigationGestures: true,
