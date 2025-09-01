@@ -48,6 +48,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
   @override
   void initState() {
     super.initState();
+    print('🧪 WEBP DEBUG: EnhancedBrowserPage initState called');
     _encryption.initialize();
     
     // Initialize animation controller
@@ -817,79 +818,50 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
       final imagesBefore = RegExp(r'<img[^>]*src="([^"]*)"[^>]*>', caseSensitive: false).allMatches(html).length;
       _log('🖼️ Processing $imagesBefore images with double quotes');
       
-      // Fix src attributes for images - proxy through bridge server for WebP support
-      html = html.replaceAllMapped(
-        RegExp(r'<img([^>]*)src="([^"]*)"([^>]*)>', caseSensitive: false),
-        (match) {
-          final beforeSrc = match.group(1)!;
-          final src = match.group(2)!;
-          final afterSrc = match.group(3)!;
-          
-          _log('🖼️ Processing image src: $src');
-          
-          // Skip if already a proxy URL or data URL
-          if (src.contains('bridge.stormycloud.org') || src.startsWith('data:')) {
-            _log('🖼️ Skipping already proxied/data URL: $src');
-            return match.group(0)!;
-          }
-          
-          // Build full URL if relative
-          String fullUrl = src;
-          if (src.startsWith('/')) {
-            fullUrl = '$scheme://$host$port$src';
-          } else if (!src.startsWith('http')) {
-            // Relative to current path
-            fullUrl = '$scheme://$host$port$currentPath$src';
-          }
-          
-          // Create proxy URL through bridge server for proper WebP handling
-          final encodedUrl = Uri.encodeComponent(fullUrl);
-          final proxyUrl = authToken.isNotEmpty 
-            ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
-            : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
-          
-          _log('🖼️ ✅ PROXYING IMAGE: $src -> BRIDGE SERVER');
-          DebugService.instance.logBrowser('Image proxy: $src -> bridge');
-          
-          // Replace src with proxy URL
-          return '<img${beforeSrc}src="$proxyUrl"$afterSrc>';
-        },
-      );
+      // Simple image src fixing first
+      _log('🖼️ Starting simple image processing...');
       
-      // Also handle single quotes
-      html = html.replaceAllMapped(
-        RegExp(r"<img([^>]*)src='([^']*)'([^>]*)>", caseSensitive: false),
-        (match) {
-          final beforeSrc = match.group(1)!;
-          final src = match.group(2)!;
-          final afterSrc = match.group(3)!;
-          
-          // Skip if already a proxy URL or data URL
-          if (src.contains('bridge.stormycloud.org') || src.startsWith('data:')) {
-            return match.group(0)!;
-          }
-          
-          // Build full URL if relative
-          String fullUrl = src;
-          if (src.startsWith('/')) {
-            fullUrl = '$scheme://$host$port$src';
-          } else if (!src.startsWith('http')) {
-            // Relative to current path
-            fullUrl = '$scheme://$host$port$currentPath$src';
-          }
-          
-          // Create proxy URL through bridge server for proper WebP handling
-          final encodedUrl = Uri.encodeComponent(fullUrl);
-          final proxyUrl = authToken.isNotEmpty 
+      // Fix basic image src attributes
+      html = html.replaceAll('src="/', 'src="$scheme://$host$port/');
+      
+      // Also fix single quotes
+      html = html.replaceAll("src='/", "src='$scheme://$host$port/");
+      
+      // NOW PROXY ALL IMAGES THROUGH BRIDGE SERVER FOR WEBP SUPPORT
+      print('🖼️ WEBP DEBUG: Adding image proxy for WebP support...');
+      _log('🖼️ Adding image proxy for WebP support...');
+      
+      // Find and proxy all image tags
+      final imageRegex = RegExp(r'<img[^>]*src="([^"]*)"[^>]*>', caseSensitive: false);
+      final imageMatches = imageRegex.allMatches(html).toList();
+      
+      print('🖼️ WEBP DEBUG: Found ${imageMatches.length} images to process');
+      _log('🖼️ Found ${imageMatches.length} images to process');
+      
+      for (final match in imageMatches.reversed) {
+        final fullImageTag = match.group(0)!;
+        final imageSrc = match.group(1)!;
+        
+        print('🖼️ WEBP DEBUG: Processing image: $imageSrc');
+        _log('🖼️ Processing image: $imageSrc');
+        
+        // Skip if already proxied
+        if (imageSrc.contains('bridge.stormycloud.org') || imageSrc.startsWith('data:')) {
+          continue;
+        }
+        
+        // Create proxy URL for WebP support
+        final encodedUrl = Uri.encodeComponent(imageSrc);
+        final proxyUrl = authToken.isNotEmpty
             ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
             : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
-          
-          _log('🖼️ Proxying image: $src -> $proxyUrl');
-          
-          // Replace src with proxy URL
-          return "<img${beforeSrc}src='$proxyUrl'$afterSrc>";
-        },
-      );
+        
+        final newImageTag = fullImageTag.replaceFirst('src="$imageSrc"', 'src="$proxyUrl"');
+        html = html.replaceFirst(fullImageTag, newImageTag);
+        
+        print('🖼️ WEBP DEBUG: ✅ PROXIED IMAGE: $imageSrc -> BRIDGE');
+        _log('🖼️ ✅ PROXIED IMAGE: $imageSrc -> BRIDGE');
+      }
       
       _log('✅ Fixed relative links for: $scheme://$host$port');
       
@@ -912,25 +884,8 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
         (match) => "href='http://$domain${match.group(1)}'",
       );
       
-      // Also fix image URLs in fallback mode
-      html = html.replaceAllMapped(
-        RegExp(r'<img([^>]*)src="(/[^"]*)"([^>]*)>', caseSensitive: false),
-        (match) {
-          final beforeSrc = match.group(1)!;
-          final src = match.group(2)!;
-          final afterSrc = match.group(3)!;
-          
-          final fullUrl = 'http://$domain$src';
-          final encodedUrl = Uri.encodeComponent(fullUrl);
-          final proxyUrl = authToken.isNotEmpty 
-            ? 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true&token=$authToken'
-            : 'https://bridge.stormycloud.org/api/v1/browse?url=$encodedUrl&raw=true';
-          
-          _log('🖼️ Fallback proxying image: $src -> $proxyUrl');
-          
-          return '<img${beforeSrc}src="$proxyUrl"$afterSrc>';
-        },
-      );
+      // Also fix image URLs in fallback mode (simplified)
+      html = html.replaceAll('src="/', 'src="http://$domain/');
     }
     
     return html;
@@ -1030,6 +985,7 @@ class _EnhancedBrowserPageState extends State<EnhancedBrowserPage> with TickerPr
 
   @override
   Widget build(BuildContext context) {
+    print('🧪 WEBP DEBUG: EnhancedBrowserPage build() called');
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: Column(
