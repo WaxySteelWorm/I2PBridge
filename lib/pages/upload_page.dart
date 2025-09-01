@@ -269,6 +269,28 @@ class _UploadPageState extends State<UploadPage> with SingleTickerProviderStateM
           );
           
           break; // Success - exit retry loop
+        } else if (streamedResponse.statusCode == 401 || streamedResponse.statusCode == 403) {
+          // API key authentication issues
+          String errorMessage = 'Authentication failed';
+          String action = '';
+          try {
+            errorMessage = decodedBody['error'] ?? errorMessage;
+            action = decodedBody['action'] ?? '';
+          } catch (e) {
+            // Use default message
+          }
+          
+          final fullMessage = action.isNotEmpty ? '$errorMessage\n$action' : errorMessage;
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(fullMessage),
+              backgroundColor: Colors.red,
+              duration: const Duration(seconds: 5),
+            ),
+          );
+          setState(() => _isLoading = false);
+          return; // Exit early for auth errors
         } else if (streamedResponse.statusCode == 503) {
           // Service unavailable - check for custom message
           String errorMessage = 'Upload service is temporarily disabled';

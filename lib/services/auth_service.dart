@@ -214,11 +214,29 @@ class AuthService extends ChangeNotifier {
         await _clearStoredToken();
         
         if (response.statusCode == 401) {
-          throw Exception('Invalid API key. Please check your configuration.');
+          // Try to parse the server's error message
+          try {
+            final responseBody = json.decode(response.body);
+            final error = responseBody['error'] ?? 'Invalid API key';
+            final action = responseBody['action'] ?? 'Please check your API key in settings';
+            throw Exception('$error. $action');
+          } catch (e) {
+            throw Exception('Invalid API key. Please check your API key in settings and try again.');
+          }
+        } else if (response.statusCode == 403) {
+          // Try to parse the server's error message
+          try {
+            final responseBody = json.decode(response.body);
+            final error = responseBody['error'] ?? 'Authentication failed';
+            final action = responseBody['action'] ?? 'Please update your app or check your API key';
+            throw Exception('$error. $action');
+          } catch (e) {
+            throw Exception('Authentication failed. Your session may have expired or your API key may be disabled.');
+          }
         } else if (response.statusCode == 429) {
           throw Exception('Rate limit exceeded. Please try again later.');
         } else {
-          throw Exception('Authentication failed: ${response.statusCode}');
+          throw Exception('Authentication failed (${response.statusCode}). Please check your API key or try again later.');
         }
       }
     } on SocketException catch (e) {

@@ -307,7 +307,27 @@ class Pop3MailService with ChangeNotifier {
         _updateStatus('');
         return true;
       } else {
-        if (response.statusCode == 400) {
+        if (response.statusCode == 401) {
+          // API key authentication failed
+          try {
+            final jsonResponse = json.decode(response.body);
+            final error = jsonResponse['error'] ?? 'Authentication required';
+            final action = jsonResponse['action'] ?? 'Please check your API key settings';
+            _lastError = '$error\n$action';
+          } catch (e) {
+            _lastError = 'Authentication required. Please check your API key.';
+          }
+        } else if (response.statusCode == 403) {
+          // Token/API key issues
+          try {
+            final jsonResponse = json.decode(response.body);
+            final error = jsonResponse['error'] ?? 'Authentication failed';
+            final action = jsonResponse['action'] ?? 'Please update your app or check your API key';
+            _lastError = '$error\n$action';
+          } catch (e) {
+            _lastError = 'Authentication failed. Please check your API key or update the app.';
+          }
+        } else if (response.statusCode == 400) {
           _lastError = 'Invalid username or password';
         } else if (response.statusCode == 503) {
           // Service unavailable - check for custom message
@@ -326,8 +346,16 @@ class Pop3MailService with ChangeNotifier {
     } catch (e) {
       if (e.toString().contains('TimeoutException')) {
         _lastError = 'Connection timeout - please try again';
+      } else if (e.toString().contains('Invalid API key')) {
+        _lastError = 'Invalid API key. Please check your API key in settings and try again.';
+      } else if (e.toString().contains('Rate limit exceeded')) {
+        _lastError = 'Too many attempts. Please try again later.';
+      } else if (e.toString().contains('Authentication failed')) {
+        _lastError = 'Authentication failed. Please check your API key or update the app.';
+      } else if (e.toString().contains('Authentication required')) {
+        _lastError = 'Authentication required. Please configure your API key in settings.';
       } else {
-        _lastError = 'Connection failed';
+        _lastError = 'Connection failed: ${e.toString()}';
       }
     }
 

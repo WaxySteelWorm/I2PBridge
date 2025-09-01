@@ -185,12 +185,37 @@ class IrcService with ChangeNotifier {
       }
       
       debugPrint('IRC: Ensuring authentication...');
-      await _authService!.ensureAuthenticated();
+      
+      try {
+        await _authService!.ensureAuthenticated();
+      } catch (authError) {
+        debugPrint('IRC: Authentication failed: $authError');
+        String errorMessage = '❌ Authentication failed';
+        
+        if (authError.toString().contains('Invalid API key')) {
+          errorMessage = '❌ Invalid API key. Please check your API key in settings.';
+        } else if (authError.toString().contains('expired')) {
+          errorMessage = '❌ Session expired. Please close and reopen the app.';
+        } else if (authError.toString().contains('disabled')) {
+          errorMessage = '❌ Your API key has been disabled. Please contact support.';
+        } else if (authError.toString().contains('Rate limit')) {
+          errorMessage = '❌ Too many attempts. Please try again later.';
+        } else {
+          errorMessage = '❌ ${authError.toString().replaceAll('Exception: ', '')}';
+        }
+        
+        _addMessage(to: 'Status', sender: 'Error', content: errorMessage);
+        _manualDisconnect = true; // Don't auto-reconnect for auth errors
+        notifyListeners();
+        return;
+      }
+      
       final token = _authService!.token;
       
       if (token == null) {
         debugPrint('IRC: Token is null after authentication!');
-        _addMessage(to: 'Status', sender: 'Error', content: 'Authentication required. Please check your API key.');
+        _addMessage(to: 'Status', sender: 'Error', content: '❌ Authentication failed. Please check your API key in settings.');
+        _manualDisconnect = true;
         notifyListeners();
         return;
       }
@@ -205,7 +230,7 @@ class IrcService with ChangeNotifier {
       debugPrint('IRC: WebSocket URL: ${wsUrl.toString().replaceAll(token, '[TOKEN]')}');
       _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
 
-      _isConnected = true;
+      // Don't set _isConnected yet - wait for successful authentication
       _buffers.clear();
       _unreadBuffers.clear();
       _userLists.clear();
@@ -224,14 +249,48 @@ class IrcService with ChangeNotifier {
 
       _channel!.stream.listen(
         (data) {
+          debugPrint('IRC: Received WebSocket data: $data');
           try {
             final jsonData = json.decode(data);
+            debugPrint('IRC: Parsed JSON type: ${jsonData['type']}');
+            
+            // Handle authentication errors
+            if (jsonData['type'] == 'error') {
+              debugPrint('IRC: Received error message from server');
+              String errorMessage = jsonData['error'] ?? 'Authentication error';
+              String action = jsonData['action'] ?? '';
+              String code = jsonData['code'] ?? 'UNKNOWN_ERROR';
+              
+              // Format error message for display
+              _addMessage(
+                to: 'Status', 
+                sender: 'Error', 
+                content: '❌ $errorMessage'
+              );
+              
+              if (action.isNotEmpty) {
+                _addMessage(
+                  to: 'Status', 
+                  sender: 'Error', 
+                  content: '💡 $action'
+                );
+              }
+              
+              // Handle specific error codes
+              if (code == 'TOKEN_MISSING' || code == 'TOKEN_EXPIRED' || 
+                  code == 'TOKEN_INVALID' || code == 'API_KEY_DISABLED') {
+                _manualDisconnect = true; // Don't auto-reconnect for auth errors
+              }
+              
+              return;
+            }
             
             // Handle encryption initialization
             if (jsonData['type'] == 'encryption_init') {
               _sessionKey = base64.decode(jsonData['key']);
               _sessionIV = base64.decode(jsonData['iv']);
               _encryptionReady = true;
+              _isConnected = true;  // NOW we're truly connected
               
               // Send acknowledgment
               _channel!.sink.add(json.encode({
@@ -320,18 +379,24 @@ class IrcService with ChangeNotifier {
         },
         onError: (error) {
           String errorMessage = 'Connection error';
+          debugPrint('IRC: WebSocket error: $error');
           
-          // Check if error contains service unavailable message
-          if (error.toString().contains('503') || error.toString().contains('Service Unavailable')) {
+          // Check for authentication errors (WebSocket close code 1008)
+          if (error.toString().contains('1008') || error.toString().contains('Authentication')) {
+            errorMessage = '❌ Authentication failed. Please check your API key in settings.';
+            _manualDisconnect = true; // Don't auto-reconnect for auth errors
+          } else if (error.toString().contains('503') || error.toString().contains('Service Unavailable')) {
             errorMessage = 'IRC service is temporarily disabled. Please try again later.';
             _manualDisconnect = true; // Don't auto-reconnect for service disabled
           } else if (error.toString().contains('WebSocketChannelException')) {
-            errorMessage = 'Failed to connect to IRC service. It may be temporarily disabled.';
+            // This might be an authentication failure
+            errorMessage = '❌ Failed to connect. Please verify your API key is valid and try again.';
+            _manualDisconnect = true; // Don't auto-reconnect
           } else {
             errorMessage = 'Error: $error';
           }
           
-          _addMessage(to: 'Status', sender: 'Status', content: errorMessage);
+          _addMessage(to: 'Status', sender: 'Error', content: errorMessage);
           _isConnected = false;
           _encryptionReady = false;
           _registrationTimer?.cancel();
@@ -345,7 +410,20 @@ class IrcService with ChangeNotifier {
     } catch (e) {
       debugPrint('IRC: Connection error: $e');
       _isConnected = false;
-      _addMessage(to: 'Status', sender: 'Error', content: 'Failed to connect: $e');
+      
+      String errorMessage;
+      if (e.toString().contains('401') || e.toString().contains('403') || 
+          e.toString().contains('Authentication') || e.toString().contains('Invalid token')) {
+        errorMessage = '❌ Authentication failed. Please check your API key in settings.';
+        _manualDisconnect = true; // Don't auto-reconnect for auth errors
+      } else if (e.toString().contains('WebSocketChannelException')) {
+        errorMessage = '❌ Failed to connect. This may be an authentication issue - please verify your API key.';
+        _manualDisconnect = true;
+      } else {
+        errorMessage = 'Failed to connect: $e';
+      }
+      
+      _addMessage(to: 'Status', sender: 'Error', content: errorMessage);
       notifyListeners();
       return;
     }
@@ -618,6 +696,12 @@ class IrcService with ChangeNotifier {
     notifyListeners();
   }
 
+  void clearBuffers() {
+    _buffers.clear();
+    _buffers['Status'] = [];
+    notifyListeners();
+  }
+  
   void disconnect() {
     _manualDisconnect = true;
     _reconnectTimer?.cancel();

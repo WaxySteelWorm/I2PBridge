@@ -55,10 +55,59 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
   }
 
   Widget _buildConnectionView(BuildContext context, IrcService ircService) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    // Check if there are any Status messages (errors)
+    final statusMessages = ircService.buffers['Status'] ?? [];
+    final hasErrors = statusMessages.any((msg) => 
+      msg.sender == 'Error' || 
+      msg.content.contains('❌') || 
+      msg.content.contains('Authentication') ||
+      msg.content.contains('failed'));
+    
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+        // Show error messages if any
+        if (hasErrors) ...[
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 20),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.red.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.red.withOpacity(0.3)),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.red, size: 32),
+                const SizedBox(height: 8),
+                const Text(
+                  'Connection Error',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.red,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                // Show last few error messages
+                ...statusMessages
+                  .where((msg) => msg.sender == 'Error' || msg.content.contains('❌'))
+                  .take(3)
+                  .map((msg) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Text(
+                      msg.content,
+                      style: const TextStyle(fontSize: 14, color: Colors.red),
+                      textAlign: TextAlign.center,
+                    ),
+                  )),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+        ],
         const Icon(Icons.chat_bubble_outline, size: 80, color: Colors.blueAccent),
         const SizedBox(height: 24),
         // Privacy information box
@@ -135,15 +184,18 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             if (channel.isEmpty) {
               channel = '#i2p'; // Default channel
             }
+            // Clear any errors and try again
+            ircService.clearBuffers();
             ircService.connect(channel);
           },
           icon: const Icon(Icons.connect_without_contact),
-          label: const Text('Connect', style: TextStyle(fontSize: 16)),
+          label: Text(hasErrors ? 'Retry Connection' : 'Connect', style: const TextStyle(fontSize: 16)),
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
         ),
-      ],
+        ],
+      ),
     );
   }
 
