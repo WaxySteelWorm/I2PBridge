@@ -66,12 +66,21 @@ class IrcService with ChangeNotifier {
   String get nickname => _nickname;
   String _nickServPassword = '';
   String _lastChannel = '';
+  String _lastServer = 'irc2p';
   Timer? _reconnectTimer;
   Timer? _registrationTimer;
   bool _manualDisconnect = false;
   DateTime? _connectionTime;
   
   bool _hideJoinQuit = false;
+  
+  // MOTD loading state
+  bool _isLoadingMOTD = false;
+  List<String> _motdBuffer = [];
+  bool get isLoadingMOTD => _isLoadingMOTD;
+  
+  // Track channels expecting NAMES response
+  Set<String> _channelsAwaitingNames = {};
 
   IrcService() {
     _loadSettings();
@@ -167,12 +176,13 @@ class IrcService with ChangeNotifier {
     _authService = authService;
   }
   
-  Future<void> connect(String initialChannel) async {
+  Future<void> connect(String initialChannel, {String server = 'irc2p'}) async {
     _manualDisconnect = false;
     _reconnectTimer?.cancel();
     _lastChannel = initialChannel; // Store the channel to join
+    _lastServer = server; // Store the server for reconnection
     
-    debugPrint('IRC: Starting connection process...');
+    debugPrint('IRC: Starting connection process to server: $server');
     await _loadSettings();
     
     try {
@@ -225,9 +235,9 @@ class IrcService with ChangeNotifier {
       
       // Create pinned HTTP client for WebSocket
       final httpClient = _createPinnedHttpClient();
-      // Include token in WebSocket URL as query parameter
-      final wsUrl = Uri.parse('wss://bridge.stormycloud.org?token=$token');
-      debugPrint('IRC: WebSocket URL: ${wsUrl.toString().replaceAll(token, '[TOKEN]')}');
+      // Include token and server in WebSocket URL as query parameters
+      final wsUrl = Uri.parse('wss://bridge.stormycloud.org?token=$token&server=$server');
+      debugPrint('IRC: WebSocket URL: ${wsUrl.toString().replaceAll(token, '[TOKEN]')}, Server: $server');
       _channel = IOWebSocketChannel.connect(wsUrl, customClient: httpClient);
 
       // Don't set _isConnected yet - wait for successful authentication
@@ -236,6 +246,8 @@ class IrcService with ChangeNotifier {
       _userLists.clear();
       _currentBuffer = 'Status';
       _encryptionReady = false;
+      _isLoadingMOTD = true;
+      _motdBuffer.clear();
       
       _buffers['Status'] = [ParsedMessage(
         sender: 'Status', 
@@ -448,7 +460,7 @@ class IrcService with ChangeNotifier {
     _reconnectTimer?.cancel();
     _addMessage(to: 'Status', sender: 'Status', content: 'Attempting to reconnect in 5 seconds...');
     _reconnectTimer = Timer(const Duration(seconds: 5), () {
-      connect(_lastChannel);
+      connect(_lastChannel, server: _lastServer);
     });
   }
 
@@ -473,9 +485,41 @@ class IrcService with ChangeNotifier {
     
     // Server numeric messages should go to Status
     if (RegExp(r':\S+ \d{3} ').hasMatch(rawMessage)) {
-      final match = RegExp(r':\S+ \d{3} \S+ :?(.*)').firstMatch(rawMessage);
-      if (match != null) {
-        final content = match.group(1) ?? rawMessage;
+      final numericMatch = RegExp(r':\S+ (\d{3}) \S+ :?(.*)').firstMatch(rawMessage);
+      if (numericMatch != null) {
+        final code = numericMatch.group(1)!;
+        final content = numericMatch.group(2) ?? '';
+        
+        // Handle MOTD messages specially
+        if (_isLoadingMOTD) {
+          if (code == '375') {
+            // Start of MOTD
+            _motdBuffer.clear();
+            _addMessage(to: 'Status', sender: 'Status', content: '📋 Loading server information...');
+            return;
+          } else if (code == '372') {
+            // MOTD line
+            _motdBuffer.add(content.trim());
+            return;
+          } else if (code == '376' || code == '422') {
+            // End of MOTD or No MOTD
+            _isLoadingMOTD = false;
+            if (_motdBuffer.isNotEmpty) {
+              _addMessage(to: 'Status', sender: 'Server', content: '══════ Server Information ══════');
+              for (final line in _motdBuffer) {
+                if (line.trim().isNotEmpty) {
+                  _addMessage(to: 'Status', sender: 'Server', content: line);
+                }
+              }
+              _addMessage(to: 'Status', sender: 'Server', content: '═══════════════════════════════');
+            }
+            _motdBuffer.clear();
+            notifyListeners();
+            return;
+          }
+        }
+        
+        // Other numeric messages
         if (content.trim().isNotEmpty) {
           _addMessage(to: 'Status', sender: 'Server', content: content.trim());
         }
@@ -492,9 +536,18 @@ class IrcService with ChangeNotifier {
         final userListString = match.group(2)!;
         final users = userListString.split(' ');
 
-        if (!_userLists.containsKey(channel)) _userLists[channel] = [];
+        // If this channel is awaiting NAMES, clear the list first
+        if (_channelsAwaitingNames.contains(channel)) {
+          _userLists[channel] = [];
+          _channelsAwaitingNames.remove(channel);
+        }
         
-        // Add users to existing list (don't clear, as we might get multiple 353 responses)
+        // Initialize list if needed
+        if (!_userLists.containsKey(channel)) {
+          _userLists[channel] = [];
+        }
+        
+        // Add users to the list (multiple 353 responses may be sent for large channels)
         for (var user in users) {
           if (user.isNotEmpty && !_userLists[channel]!.contains(user)) {
             _userLists[channel]!.add(user);
@@ -558,7 +611,9 @@ class IrcService with ChangeNotifier {
           
           if (sender == _nickname) {
             setCurrentBuffer(channel);
-            // Request user list when we join a channel
+            // Clear user list and request fresh NAMES when we join a channel
+            _userLists[channel] = [];
+            _channelsAwaitingNames.add(channel);
             _sendEncryptedMessage('NAMES $channel');
           }
         }

@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/irc_service.dart';
 
 class IrcPage extends StatefulWidget {
@@ -18,9 +19,29 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
   final TextEditingController _messageController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  String _selectedServer = 'irc2p'; // Default server
 
   @override
   bool get wantKeepAlive => true;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadServerPreference();
+  }
+  
+  Future<void> _loadServerPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedServer = prefs.getString('irc_selected_server') ?? 'irc2p';
+    setState(() {
+      _selectedServer = savedServer;
+    });
+  }
+  
+  Future<void> _saveServerPreference(String server) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('irc_selected_server', server);
+  }
 
   @override
   void didChangeDependencies() {
@@ -154,6 +175,89 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
         const SizedBox(height: 24),
         Text('Nickname: ${ircService.nickname}', textAlign: TextAlign.center, style: const TextStyle(fontSize: 16)),
         const SizedBox(height: 16),
+        // Server Selection
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.grey.shade400),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButton<String>(
+              value: _selectedServer,
+              isExpanded: true,
+              icon: const Icon(Icons.arrow_drop_down),
+              items: const [
+                DropdownMenuItem(
+                  value: 'irc2p',
+                  child: Row(
+                    children: [
+                      Icon(Icons.star, color: Colors.amber, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('IRC2P (Official)', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text('Official I2P IRC Network', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'ilita',
+                  child: Row(
+                    children: [
+                      Icon(Icons.chat, color: Colors.blue, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('ILITA', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text('ILITA IRC Network', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                DropdownMenuItem(
+                  value: 'simp',
+                  child: Row(
+                    children: [
+                      Icon(Icons.chat_bubble, color: Colors.green, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('SIMP', style: TextStyle(fontWeight: FontWeight.bold)),
+                            Text('SIMP IRC Network', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+              onChanged: (String? newValue) {
+                if (newValue != null) {
+                  setState(() {
+                    _selectedServer = newValue;
+                  });
+                  _saveServerPreference(newValue);
+                }
+              },
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
         TextField(
           controller: _channelController,
           decoration: const InputDecoration(
@@ -186,7 +290,7 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
             }
             // Clear any errors and try again
             ircService.clearBuffers();
-            ircService.connect(channel);
+            ircService.connect(channel, server: _selectedServer);
           },
           icon: const Icon(Icons.connect_without_contact),
           label: Text(hasErrors ? 'Retry Connection' : 'Connect', style: const TextStyle(fontSize: 16)),
@@ -251,6 +355,36 @@ class _IrcPageState extends State<IrcPage> with AutomaticKeepAliveClientMixin {
               itemCount: currentMessages.length,
               itemBuilder: (context, index) {
                 final msg = currentMessages[index];
+                
+                // Special handling for loading message
+                if (msg.content.contains('Loading server information...')) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Colors.blueAccent),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          msg.content,
+                          style: const TextStyle(
+                            color: Colors.blueAccent,
+                            fontStyle: FontStyle.italic,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+                
                 if (msg.isNotice || msg.sender == 'Status' || msg.sender == 'Server') {
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4.0),
